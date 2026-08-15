@@ -105,6 +105,7 @@ interface RunState {
     absMaxTurns: number;
     softBudgetPct: number;
     maxExtensions: number;
+    maxCost: number | null; // optional $ ceiling (--budget / maxCost) for the cost soft-warning
     softAsked: boolean;
     pendingEstimate: number | null;
     estBias: { n: number; bias: number } | null;
@@ -163,6 +164,11 @@ interface RunState {
     cost: number;
     extensionCount: number;
     warned50: boolean;
+    // gateDirty: a bash/event may have changed the tree since the last gate, so
+    // the review-gate dedup must not reuse a stale result. Set on any bash, cleared
+    // whenever the gate re-verifies. warnedCost50: one-shot cost soft-warning.
+    gateDirty: boolean;
+    warnedCost50: boolean;
     knownFiles: string[];
     pendingNewFiles?: string[];
     peakTurnCost: number;
@@ -638,6 +644,7 @@ export default function harness(pi: ExtensionAPI) {
           absMaxTurns: nb.absMaxTurns,
           softBudgetPct: nb.softBudgetPct,
           maxExtensions: Number(cfg.maxExtensions ?? DEFAULT_CONFIG.maxExtensions),
+          maxCost: Number(flags.budget ?? cfg.maxCost ?? 0) || null,
           softAsked: false,
           pendingEstimate: null,
           estBias: loadEstimateBias(cwd),
@@ -671,7 +678,7 @@ export default function harness(pi: ExtensionAPI) {
         // gitNewFiles diff reports only files NEW since the run started, not
         // every already-changed/uncommitted file in the working tree.
         stats: (() => {
-          const st = { calls: 0, tokensIn: 0, tokensCached: 0, tokensOut: 0, gateRuns: 0, gateFails: 0, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, warned50: false, knownFiles: [], peakTurnCost: 0, turns: 0, cost: 0 };
+          const st = { calls: 0, tokensIn: 0, tokensCached: 0, tokensOut: 0, gateRuns: 0, gateFails: 0, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, warned50: false, gateDirty: false, warnedCost50: false, knownFiles: [], peakTurnCost: 0, turns: 0, cost: 0 };
           try {
             st.knownFiles = gitNewFiles(cwd, new Set()).set;
           } catch {
@@ -1055,15 +1062,23 @@ export default function harness(pi: ExtensionAPI) {
       }
       run.stage = "review";
       // Run the strong (full) gate now so the model sees the result and can fix.
+      // Dedup: when fullCmd is unset the review gate == the edit-gate command, and
+      // the last green edit-gate already verified this identical tree if nothing
+      // dirtied it since — reuse that verdict instead of a redundant suite run.
       const gate = run.fullCmd ? run.fullCmd : run.verifyCmd ? run.verifyCmd : null;
       let verdict: string | null = null;
       if (gate) {
-        const g = gateResult(gate, run.verifyCwd ?? run.cwd, run.timeoutMs);
-        run.stats.gateRuns++;
-        if (!g.ok) run.stats.gateFails++;
-        run.stats.finalFull = { ok: g.ok };
-        fillLazyBaseline(run, g);
-        verdict = g.ok ? "PASS" : "FAIL";
+        if (!run.fullCmd && !run.stats.gateDirty && run.stats.consecutiveFails === 0) {
+          run.stats.finalFull = { ok: true };
+          verdict = "PASS";
+        } else {
+          const g = gateResult(gate, run.verifyCwd ?? run.cwd, run.timeoutMs);
+          run.stats.gateRuns++;
+          if (!g.ok) run.stats.gateFails++;
+          run.stats.finalFull = { ok: g.ok };
+          fillLazyBaseline(run, g);
+          verdict = g.ok ? "PASS" : "FAIL";
+        }
       }
       writeRun(run);
       ctx.ui.notify(
@@ -1123,10 +1138,16 @@ export default function harness(pi: ExtensionAPI) {
       // the stopped run left the project valid. Uses the strong (full) gate when
       // the project has one.
       if (run.verifyCmd) {
-        const fg = gateResult(run.fullCmd ?? run.verifyCmd, run.verifyCwd ?? run.cwd, run.timeoutMs);
-        run.stats.finalGate = { ok: fg.ok };
-        run.stats.gateRuns++;
-        if (!fg.ok) run.stats.gateFails++;
+        // Final gate: reuse the last green edit-gate when the tree is unchanged
+        // (fullCmd unset = same command; gateDirty false = no event since it ran).
+        if (!run.fullCmd && !run.stats.gateDirty && run.stats.consecutiveFails === 0) {
+          run.stats.finalGate = { ok: true };
+        } else {
+          const fg = gateResult(run.fullCmd ?? run.verifyCmd, run.verifyCwd ?? run.cwd, run.timeoutMs);
+          run.stats.finalGate = { ok: fg.ok };
+          run.stats.gateRuns++;
+          if (!fg.ok) run.stats.gateFails++;
+        }
       }
       writeRun(run);
       return {
@@ -1200,6 +1221,10 @@ export default function harness(pi: ExtensionAPI) {
   pi.on("tool_result", (event) => {
     const run = activeRun;
     if (!run || run.status !== "running") return;
+    // Any bash (even read-only, conservatively) may have changed the tree in a
+    // way bashMutates() didn't flag — mark dirty so the review-gate dedup never
+    // reuses a stale-green result. The gate below clears it once it re-verifies.
+    if (event.toolName === "bash") run.stats.gateDirty = true;
     if (event.toolName !== "edit" && event.toolName !== "write") {
       // Gate bash results too when the command plausibly wrote to the project
       // (builds, installs, redirects, git mutations) so a command-line fix is
@@ -1211,6 +1236,7 @@ export default function harness(pi: ExtensionAPI) {
 
     const r = gateResult(run.verifyCmd, run.verifyCwd ?? run.cwd, run.timeoutMs);
     run.stats.gateRuns++;
+    run.stats.gateDirty = false; // the gate just re-verified the current tree
     let coach = "";
     if (r.ok) {
       run.stats.consecutiveFails = 0;
@@ -1245,12 +1271,24 @@ export default function harness(pi: ExtensionAPI) {
         // a smaller blast radius to regain a green baseline.
         coach = `\nHARNESS: ${run.stats.consecutiveFails} consecutive gate fails — thinking raised to ${run.ladder.thinkingEscalated}. Signal to NARROW SCOPE: revert the last edit or break the change into smaller steps to regain a green baseline.`;
       }
+      // Failure-memory nudge: ride the existing gate-fail coach rail so the model
+      // classifies the failure and persists a lesson instead of re-learning it next
+      // session (discipline in code, not prose). Memory lives under .harness per protocol.
+      coach += `\nHARNESS: gate failed — classify this failure (known|new|transient). If new, append a one-line cause + prevention to .harness/longterm/memory/failures.md via your tools; if known, apply its Prevention Rule.`;
     }
     // Mid-run budget progress feedback so the model can wrap up before the wall.
     const pct = run.stats.turns / Math.max(1, run.budget.maxTurns);
     if (pct >= 0.5 && !run.stats.warned50) {
       run.stats.warned50 = true;
       coach += `\nHARNESS: ${run.stats.turns}/${run.budget.maxTurns} turns used (50%) — prioritize remaining work.`;
+    }
+    // Cost soft-warning mirrors the turns% warning but on dollars: ladder-escalated
+    // turns cost more per turn, so turns% alone understates spend. Warn once at 50%
+    // of an optional --budget / maxCost ceiling. No hard stop — YAGNI until evidence.
+    const maxCost = run.budget.maxCost;
+    if (maxCost && !run.stats.warnedCost50 && run.stats.cost >= maxCost * 0.5) {
+      run.stats.warnedCost50 = true;
+      coach += `\nHARNESS: est. cost $${run.stats.cost.toFixed(4)} reached 50% of the $${maxCost} budget — prioritize remaining work.`;
     }
     // Soft budget: ask the model for its remaining-work estimate BEFORE the wall
     // so a healthy long run can be extended without a stop/resume round-trip.

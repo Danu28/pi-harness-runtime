@@ -46,6 +46,7 @@ Need it per-project instead? Same files, but under `.pi/extensions/` and `.pi/pr
 /run <task description>          run a task under the harness
 /run --think <off|minimal|low|medium|high>   force a thinking level
 /run --lane <S|M|L>              force a complexity lane
+/run --budget <$>                cost soft-warning ceiling (50% warning, no hard stop)
 /harness-resume [N]              resume a stopped run (state, stats, scope preserved)
 /harness-reset                   clear stale run state after a crash
 /harness-stats                   show run statistics
@@ -65,7 +66,18 @@ During a run, the harness declares an edit scope (`harness_declare`), runs the v
 | `timeoutMs` | Gate timeout |
 | `verifyTier` | `quick` \| `standard` \| `full` — verifier depth |
 | `autoCommit` | Commit the run's changes when done |
+| `maxCost` | Optional cost ceiling ($); drives the 50% cost soft-warning (same as `--budget`) |
 | `scope.strict` | Block edits outside the declared set when `true` |
+
+Two cheap correctness/cost refinements are built in:
+
+- **Review-gate dedup** — when no `fullCmd` is configured, the review/final gate runs the
+  same command the last edit-gate already ran on the identical tree, so the harness
+  reuses that green result instead of re-running the suite. A `bash` event that might
+  have changed the tree (even if `bashMutates()` didn't flag it) disables the dedup,
+  so it can never report a stale-green review.
+- **Failure-memory nudge** — on a gate failure the harness coaches the model to classify
+  it (`known`/`new`/`transient`) and persist a lesson under `.harness/longterm/memory/`.
 
 No `harness.json` → the harness scans `package.json` scripts + language-specific gates (tsc, pytest, go vet, cargo check…) and falls back to a `node --check` syntax gate; without any of those it runs in **degraded mode** (clearly labeled).
 

@@ -365,12 +365,23 @@ export function phaseThinking({ forcedThink = null, forcedEdit = null, aiPredict
  * Returns { flags: { think, edit }, task }.
  */
 export function parseRunArgs(args) {
-  const flags = { think: null, edit: null, persona: null, lane: null };
+  const flags = { think: null, edit: null, persona: null, lane: null, budget: null };
   if (!args) return { flags, task: "" };
   const tokens = String(args).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   const rest = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
+    if (t === "--budget") {
+      // Numeric cost ceiling (dollars) for the soft-warning; NaN/<=0 dropped.
+      const val = tokens[i + 1];
+      const num = val && !val.startsWith("--") ? Number(val) : NaN;
+      if (Number.isFinite(num) && num > 0) {
+        flags.budget = num;
+        i++; // consume the value token
+      }
+      // else: missing/invalid value → drop the flag token, keep the rest
+      continue;
+    }
     if (t === "--think" || t === "--edit" || t === "--persona" || t === "--lane") {
       const key = t === "--persona" ? "persona" : t === "--think" ? "think" : t === "--edit" ? "edit" : "lane";
       const val = tokens[i + 1];

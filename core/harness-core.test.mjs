@@ -176,45 +176,58 @@ test("reportRows surfaces leftover even when auto-commit skips", () => {
 
 test("parseRunArgs extracts --think/--edit/--lane and leaves the task", () => {
   assert.deepEqual(parseRunArgs('--think high "refactor the auth module"'), {
-    flags: { think: "high", edit: null, persona: null, lane: null },
+    flags: { think: "high", edit: null, persona: null, lane: null, budget: null },
     task: "refactor the auth module",
   });
   assert.deepEqual(parseRunArgs("--think medium --edit low add the OAuth flow"), {
-    flags: { think: "medium", edit: "low", persona: null, lane: null },
+    flags: { think: "medium", edit: "low", persona: null, lane: null, budget: null },
     task: "add the OAuth flow",
   });
   assert.deepEqual(parseRunArgs("--edit high bump version"), {
-    flags: { think: null, edit: "high", persona: null, lane: null },
+    flags: { think: null, edit: "high", persona: null, lane: null, budget: null },
     task: "bump version",
   });
   // --lane flag parsed + uppercased
   assert.deepEqual(parseRunArgs("--lane l fix the auth migration"), {
-    flags: { think: null, edit: null, persona: null, lane: "L" },
+    flags: { think: null, edit: null, persona: null, lane: "L", budget: null },
     task: "fix the auth migration",
   });
   assert.deepEqual(parseRunArgs("--lane S bump version"), {
-    flags: { think: null, edit: null, persona: null, lane: "S" },
+    flags: { think: null, edit: null, persona: null, lane: "S", budget: null },
     task: "bump version",
   });
   // no flags → untouched task, null flags
-  assert.deepEqual(parseRunArgs("just a normal task"), { flags: { think: null, edit: null, persona: null, lane: null }, task: "just a normal task" });
+  assert.deepEqual(parseRunArgs("just a normal task"), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "just a normal task" });
   // flags come before or among task words
   assert.deepEqual(parseRunArgs("refactor --think high the module"), {
-    flags: { think: "high", edit: null, persona: null, lane: null },
+    flags: { think: "high", edit: null, persona: null, lane: null, budget: null },
     task: "refactor the module",
+  });
+  // --budget flag parsed as a positive number
+  assert.deepEqual(parseRunArgs("--budget 2.5 ship the refactor"), {
+    flags: { think: null, edit: null, persona: null, lane: null, budget: 2.5 },
+    task: "ship the refactor",
+  });
+  assert.deepEqual(parseRunArgs("--think low --budget 10 do work"), {
+    flags: { think: "low", edit: null, persona: null, lane: null, budget: 10 },
+    task: "do work",
   });
 });
 
 test("parseRunArgs drops malformed/invalid flags", () => {
   // unknown level → flag dropped, value stays as a task word
-  assert.deepEqual(parseRunArgs("--think turbo do work"), { flags: { think: null, edit: null, persona: null, lane: null }, task: "turbo do work" });
+  assert.deepEqual(parseRunArgs("--think turbo do work"), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "turbo do work" });
   // invalid lane → dropped, value stays as task word
-  assert.deepEqual(parseRunArgs("--lane XL do work"), { flags: { think: null, edit: null, persona: null, lane: null }, task: "XL do work" });
+  assert.deepEqual(parseRunArgs("--lane XL do work"), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "XL do work" });
+  // non-numeric / non-positive budget → dropped, value stays as task word
+  assert.deepEqual(parseRunArgs("--budget abc do work"), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "abc do work" });
+  assert.deepEqual(parseRunArgs("--budget 0 do work"), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "0 do work" });
+  assert.deepEqual(parseRunArgs("--budget"), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "" });
   // missing value → flag dropped
-  assert.deepEqual(parseRunArgs("--think"), { flags: { think: null, edit: null, persona: null, lane: null }, task: "" });
+  assert.deepEqual(parseRunArgs("--think"), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "" });
   // empty input
-  assert.deepEqual(parseRunArgs(""), { flags: { think: null, edit: null, persona: null, lane: null }, task: "" });
-  assert.deepEqual(parseRunArgs(null), { flags: { think: null, edit: null, persona: null, lane: null }, task: "" });
+  assert.deepEqual(parseRunArgs(""), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "" });
+  assert.deepEqual(parseRunArgs(null), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "" });
 });
 
 test("parseLanePrediction validates the Lane marker", () => {
@@ -421,15 +434,15 @@ test("renderPersona builds stage role + optional domain focus", () => {
 
 test("parseRunArgs extracts --persona and validates it", () => {
   assert.deepEqual(parseRunArgs('--persona security "harden the auth module"'), {
-    flags: { think: null, edit: null, persona: "security", lane: null },
+    flags: { think: null, edit: null, persona: "security", lane: null, budget: null },
     task: "harden the auth module",
   });
   assert.deepEqual(parseRunArgs("--think high --persona performance refactor hot loop"), {
-    flags: { think: "high", edit: null, persona: "performance", lane: null },
+    flags: { think: "high", edit: null, persona: "performance", lane: null, budget: null },
     task: "refactor hot loop",
   });
   // invalid persona → flag dropped, value stays as a task word
-  assert.deepEqual(parseRunArgs("--persona wizard do work"), { flags: { think: null, edit: null, persona: null, lane: null }, task: "wizard do work" });
+  assert.deepEqual(parseRunArgs("--persona wizard do work"), { flags: { think: null, edit: null, persona: null, lane: null, budget: null }, task: "wizard do work" });
 });
 
 test("reportRows surfaces the plan count when a tasklist exists", () => {
