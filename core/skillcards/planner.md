@@ -3,7 +3,7 @@
 Turn a request into a verified implementation plan BEFORE code. (Run the full
 `SKILL.md` only when editing the planning process itself.)
 
-## Output artifact → memory/plan.md
+## Output artifact → plan.md (in the harness memory root)
 - **Restatement** — user's intent, verbatim.
 - **Acceptance Criteria** — one verifiable sentence each.
 - **Quality Contract** (M/L tasks) — 3–5 artifact-type criteria the verifier treats as ACs.

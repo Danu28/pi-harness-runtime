@@ -4,9 +4,8 @@ Any multi-agent/session work. Persistent brain: plan, decisions, knowledge,
 progress, problems (+ optional failures.md). (Full `SKILL.md` = process reference.)
 
 ## Output artifact
-`memory/` with the five markdown files; run the contract gate
-`powershell "$HOME\.pi\agent\skills\shared-project-memory\check.ps1" -MemoryPath memory`
-after plan-publish, build, and verify.
+Harness memory root (`.harness/longterm/memory/`) with the five markdown files; run
+the contract gate `check.ps1 -MemoryPath <root>` after plan-publish, build, and verify.
 
 ## File roles
 - **plan.md** — the contract (what was promised): Restatement, Acceptance Criteria,
@@ -15,7 +14,7 @@ after plan-publish, build, and verify.
 - **decisions.md** — choice + Context/Options/Chosen/Consequences (record rejected options).
 - **knowledge.md** — facts + gotchas (note the file each fact refers to; mark unsure `(unverified)`).
 - **problems.md** — one problem per entry (Status: Open/Investigating/Fixed).
-- **failures.md** — Failure Memory: minimal 3-line lessons (Failure, Prevention Rule, `sig:`), `conf:` 1.
+- **failures.md** — Failure Memory: minimal 3-line lessons (Failure, Prevention Rule), `conf: 1`.
 
 ## Non-negotiable rules
 - Read before you act; create files if missing; write as you learn; small dated append-mostly entries.

@@ -17,10 +17,10 @@ Verify completed work before shipping. (Full `SKILL.md` = process reference.)
 - **Validate only what the builder didn't prove** — trust `verify: <check> — passed` + `files:`
   records; don't re-run builder-proved checks. Supply evidence only for unproven criteria.
 - **Cross-check plan-vs-intent**: a criterion that drifted from or dropped the user's intent is a
-  Fail even if the code meets the plan. Check.ps1 gate is part of the evidence base.
+  Fail even if the code meets the plan.
 - **Deterministic ACs get deterministic evidence** (grep/command/lint), not LLM judgment.
 - Tests exist to fail — mentally mutate the code; a test that still passes is worthless.
 - Findings need file:line + evidence; no vibes. **Report, don't fix, unless asked.**
 - Delta-only re-verify on cycle ≥2 (audit only `## Re-verify scope`); bounded loop, stop at 2/2.
-- On Pass: append one line to `memory/workflow.md` (lane | cycles | revisions | repeats | verdict)
-  and a `## Reflection` to plan.md.
+- On Pass: append one line to `workflow.md` (lane | cycles | revisions | repeats | verdict)
+  and a `## Reflection` to plan.md (harness memory root).
