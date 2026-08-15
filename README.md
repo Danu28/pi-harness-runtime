@@ -34,6 +34,8 @@ cp -r core ~/.pi/agent/extensions/          # adds core/harness-core.mjs, core/s
 cp prompts/run.md ~/.pi/agent/prompts/run.md
 ```
 
+**Prefer a script?** Run `bash ./install.sh` — idempotent: clones/pulls the repo into `~/.pi/agent/.extension-src/`, copies exactly the same files, nothing else.
+
 Then reload — `/reload` (or restart pi). On Windows, `~` is `%USERPROFILE%`.
 
 Need it per-project instead? Same files, but under `.pi/extensions/` and `.pi/prompts/` in the project.
