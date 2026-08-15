@@ -41,3 +41,14 @@ If you produced a `## Plan` block in step 1, BUILD follows it: execute the Tasks
 7. When all edits are done and the fast gate is green, call `harness_review` to enter the REVIEW stage (the harness runs the full gate and prints it). Then audit your complete diff for correctness + acceptance; fix any failure (one fix at a time, then re-review) or summarize.
 8. Done = REVIEW stage passed + you reviewed the complete diff once + acceptance is met. Write a short summary: what changed, files touched, gate result.
 Prefer ending it with Commit: <one-line what-changed> — the auto-commit uses that line as its subject. If you CANNOT finish within the remaining budget, end your summary with a line exactly like "Remaining: N turns" so the harness can tell the user how much more is needed. The harness reports cost stats after you finish.
+
+## Ideation phase (--phase ideate / `Phase: ideate`)
+When running in ideate mode (set via `--phase ideate` or your `Phase: ideate` marker),
+the default implement pipeline is prefixed by a divergent brainstorm phase. Diverge
+first: produce ≥10 distinct idea options, question them, then converge to 3–5 ranked
+candidates. End with a `## Candidate Requirements` block — one verifiable sentence per
+idea, in rank order. The harness captures this block and arms **Gate 1**; the user
+reviews the candidates with `/harness-gate1-pass`, `/harness-gate1-skip`, or
+`/harness-gate1-reject` before you produce a `## Plan`. If no idea survives, recommend
+rejection (no build) rather than forcing a plan. The default phase is `implement` — the
+standard pipeline above, with no ideation.

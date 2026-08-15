@@ -365,12 +365,21 @@ export function phaseThinking({ forcedThink = null, forcedEdit = null, aiPredict
  * Returns { flags: { think, edit }, task }.
  */
 export function parseRunArgs(args) {
-  const flags = { think: null, edit: null, persona: null, lane: null, budget: null };
+  const flags = { think: null, edit: null, persona: null, lane: null, budget: null, phase: null };
   if (!args) return { flags, task: "" };
   const tokens = String(args).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   const rest = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
+    if (t === "--phase") {
+      const val = tokens[i + 1];
+      if (val && !val.startsWith("--") && PHASE_TAXONOMY.includes(val.toLowerCase())) {
+        flags.phase = val.toLowerCase();
+        i++; // consume the value token
+      }
+      // else: missing/invalid value → drop the flag token, keep the rest
+      continue;
+    }
     if (t === "--budget") {
       // Numeric cost ceiling (dollars) for the soft-warning; NaN/<=0 dropped.
       const val = tokens[i + 1];
@@ -481,6 +490,24 @@ export const PERSONA_TAXONOMY = ["generalist", "security", "performance", "api",
 // escalator.
 export const LANES = ["S", "M", "L"];
 
+// Run phases (ideation feature). "implement" = the default pipeline
+// (brainstorm-less). "ideate" = a divergent idea-generation phase that runs
+// before filtering (Gate 1) and planning. Set via --phase flag or the model's
+// `Phase: ideate|implement` marker (mirrors the Lane/Thinking markers).
+export const PHASE_TAXONOMY = ["ideate", "implement"];
+
+/**
+ * Parse a "Phase: <ideate|implement>" prediction from the model's first message.
+ * Validated against PHASE_TAXONOMY; returns null if absent/invalid. Precedence:
+ * --phase flag > this prediction > "implement". Honored only pre-declare.
+ */
+export function parsePhasePrediction(text) {
+  const m = String(text ?? "").match(/Phase:\s*(ideate|implement)\b/i);
+  if (!m) return null;
+  const phase = m[1].toLowerCase();
+  return PHASE_TAXONOMY.includes(phase) ? phase : null;
+}
+
 /**
  * Parse a "Lane: <S|M|L>" prediction from the model's first message (the
  * triage marker). Validated against LANES; returns null if absent/invalid.
@@ -504,6 +531,35 @@ export function gate2Required(lane, plan) {
 }
 
 /**
+ * Gate 1 condition (ideation feature): the ideas-review gate fires only for an
+ * ideate-phase run that has produced candidates. Mirrors gate2Required: the
+ * reviewer must challenge the candidates before planning proceeds.
+ */
+export function gate1Required(phase, plan) {
+  return phase === "ideate" && !!(plan && plan.candidates && plan.candidates.length);
+}
+
+/**
+ * Parse a `## Candidate Requirements` block (the brainstormer's deliverable)
+ * into a ranked list of candidate strings. Extracts the numbered/bulleted items
+ * under the heading, stopping at the next `##` heading. Best-effort: no block
+ * → empty array.
+ */
+export function parseCandidates(text) {
+  const s = String(text ?? "");
+  const m = s.match(/##\s*Candidate Requirements/i);
+  if (!m) return [];
+  const body = s.slice(m.index + m[0].length);
+  const end = body.search(/^##(?!#)/m);
+  const block = (end === -1 ? body : body.slice(0, end)).trim();
+  if (!block) return [];
+  return block
+    .split(/\n(?=(?:\d+[\.\)]\s|[-*]\s))/)
+    .map((l) => l.replace(/^\s*(?:\d+[\.\)]\s|[-*]\s)/, "").trim())
+    .filter(Boolean);
+}
+
+/**
  * Compute plan-execution progress (revised-plan A4) from a message's checkbox
  * ticks (`- [x]` done vs `- [ ]` open). Returns { done, total, remaining,
  * current } where current = the first open task's text (the task Build should
@@ -523,6 +579,7 @@ export function parsePlanProgress(text) {
 // Stage → skill-card mapping (revised-plan A7). The injected operating-discipline
 // card follows the active stage instead of always being "builder".
 const STAGE_CARD = {
+  ideation: "brainstormer",
   requirements: "reviewer",
   plan: "planner",
   "plan-review": "reviewer",
@@ -1455,6 +1512,22 @@ export function reportRows(run) {
     ["verify", run.verifyLabel ?? "none", verifyMeaning(run)],
     ["baseline", run.baseline ? (run.baseline.ok ? "GREEN" : "RED") : "N/A", "pre-run state"],
   );
+  // Ideation phase row: shown only for ideate runs (or a set gate 1 verdict), so
+  // the default implement path's report stays clean.
+  if (run.phase === "ideate" || run.plan?.gate1) {
+    const g1 = run.plan?.gate1;
+    const meaning =
+      g1 === "rejected"
+        ? "no build — ideation concluded no viable idea"
+        : g1 === "pending"
+          ? "candidates produced — gate 1 pending"
+          : g1 === "passed"
+            ? "candidates reviewed — gate 1 passed"
+            : g1 === "skipped"
+              ? "candidates — gate 1 skipped (override)"
+              : "ideation";
+    rows.push(["phase", "ideate", meaning]);
+  }
   if (run.verifyCwd && run.verifyCwd !== run.cwd) {
     rows.push(["gate root", run.verifyCwd, "manifest above cwd"]);
   }
