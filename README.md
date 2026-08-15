@@ -17,7 +17,7 @@ The discipline is enforced in **code**, not prose: the verify command runs after
 | `core/compile-skills.mjs` | Card validator — enforces a card exists + token budget, cross-checks against full `SKILL.md` sources when a skills root is present |
 | `prompts/run.md` | The `/run` protocol prompt (task/snapshot/persona markers) — read by the harness at runtime |
 
-> **About the skills:** the harness deliberately does **not** need the full `SKILL.md` sources (`~/.pi/agent/skills/*/SKILL.md`). Loading those into every agent context is the "skills fill context" leak; the 5 cards above are what the dev loop actually injects, and `compile-skills.mjs` proves the size reduction (13,244 → 1,898 tokens). Copy only the cards — the full skill pipeline stays a personal-setup concern.
+> **About the skills — nothing is missing.** This repo ships the complete runtime set: the 5 cards in `core/skillcards/` are the full operating discipline the dev loop injects, and `compile-skills.mjs` validates them. The long-form `SKILL.md` sources they were compiled from are intentionally **not** part of the repo — loading ~1,300–3,800-token process templates into every agent context is exactly the "skills fill context" leak this design removes (`compile-skills.mjs` proves the win: 13,244 → 1,898 tokens). The harness never reads those sources at runtime; the cards are what runs. Want the long-form versions instead, or your own skills? Create them under `~/.pi/agent/skills/<name>/SKILL.md` using pi's standard skills mechanism — `compile-skills.mjs` cross-checks the repo cards against that root when it exists, and still passes validation on machines without it, so a fresh install is never left unvalidated.
 
 ## Install
 
