@@ -8,19 +8,19 @@ The discipline is enforced in **code**, not prose: the verify command runs after
 
 ## What's inside (the runtime set)
 
-Everything lives under one self-contained directory, `harness/` — the complete extension as a single drop-in unit (create-pi-extension style: `index.ts` entry + its modules bundled alongside):
+Everything lives under one self-contained directory, `harness/` — the complete extension as a single drop-in unit (create-pi-extension style: `index.ts` entry + its modules bundled alongside). The root files — `package.json`, `tsconfig.json`, `README.md`, `LICENSE` — are the dev pipeline (tests/typecheck), not part of the installed unit.
 
 | File | Role |
 |------|------|
 | `harness/index.ts` | The extension: registers `/run`, `/harness-resume`, `/harness-reset`, `/harness-stats`, `/harness-clean-temp`, the `harness_declare`/`harness_review` tools, and the gate/telemetry machinery |
 | `harness/core/harness-core.mjs` | All pure logic (scoring, scope checks, budget ladder, snapshot/tldr, auto-commit) — unit-testable without pi |
-| `harness/core/skillcards/*.md` | **Runtime skill cards** — compact (~300–500 token) versions of the planner/builder/reviewer/verifier/shared-project-memory skills that the harness injects into the run protocol |
-| `harness/core/harness-core.test.mjs` | 54 unit tests for the core (zero deps, `node --test`) |
+| `harness/core/skillcards/*.md` | **Runtime skill cards** — compact (~300–500 token) versions of the planner/builder/reviewer/brainstormer/verifier/shared-project-memory skills that the harness injects into the run protocol |
+| `harness/core/harness-core.test.mjs` | 58 unit tests for the core (zero deps, `node --test`) |
 | `harness/core/compile-skills.mjs` | Card validator — enforces a card exists + token budget, cross-checks against full `SKILL.md` sources when a skills root is present |
 | `harness/prompts/run.md` | The `/run` protocol prompt (task/snapshot/persona markers) — read by the harness at runtime |
 | `harness/install.sh` · `harness/install-dev.sh` | Idempotent installers — clone/pull or local-sync the extension into the live agent dir |
 
-> **About the skills — nothing is missing.** The 5 cards in `harness/core/skillcards/` are the full operating discipline: they're what the dev loop injects and `compile-skills.mjs` validates. The long-form `SKILL.md` sources are intentionally not shipped — loading ~1,300–3,800-token templates into every agent context recreates the exact "skills fill context" leak this design removes (13,244 → 1,898 tokens). The harness never reads them at runtime; want them, or your own skills? Drop them in `~/.pi/agent/skills/<name>/SKILL.md` — the validator still passes on machines without that root.
+> **About the skills — nothing is missing.** The 6 cards in `harness/core/skillcards/` are the full operating discipline: they're what the dev loop injects and `compile-skills.mjs` validates. The long-form `SKILL.md` sources are intentionally not shipped — loading ~1,300–3,800-token templates into every agent context recreates the exact "skills fill context" leak this design removes (14,362 → 2,245 tokens). The harness never reads them at runtime; want them, or your own skills? Drop them in `~/.pi/agent/skills/<name>/SKILL.md` — the validator still passes on machines without that root.
 
 ## Install
 
@@ -102,7 +102,7 @@ No `harness.json` → the harness scans `package.json` scripts + language-specif
 
 ```bash
 npm install    # dev deps: pi types, typescript, @types/node
-npm test       # 54 unit tests for harness/core/harness-core.mjs (node --test)
+npm test       # 58 unit tests for harness/core/harness-core.mjs (node --test)
 npm run typecheck
 node harness/core/compile-skills.mjs   # validate the injected skill cards (token budget + source cross-check)
 ```
