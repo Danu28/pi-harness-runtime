@@ -3,13 +3,14 @@
 # Repo (source of truth): https://github.com/Danu28/pi-harness-runtime
 #
 # Model: repos are the source of truth; ~/.pi/agent/extensions is a pure installed
-# state. Develop + test in the repo, run this to install/update. Idempotent.
+# state. Develop + test in the repo, run this to install/update. Idempotent
+# (clean replace of the harness dir — no stale files layered on top).
 #
-# The harness needs pi's MIRROR LAYOUT — paths resolve via getAgentDir():
-#   skill cards  → ~/.pi/agent/extensions/core/skillcards/
-#   protocol     → ~/.pi/agent/prompts/run.md
-# so the files must land exactly where the repo lays them out. A subdir clone
-# (extensions/<repo>/) would break resolution — never do that for the harness.
+# The harness is SELF-CONTAINED: the whole extension — entry (index.ts), core/
+# (logic, tests, skill cards) and prompts/ (run protocol) — lives in one dir,
+# and the runtime resolves cards + protocol relative to its own location. So
+# installation is simply copying harness/ into extensions/ (auto-discovered via
+# extensions/*/index.ts). No flat mirror copies required.
 set -euo pipefail
 
 REPO=https://github.com/Danu28/pi-harness-runtime
@@ -25,11 +26,23 @@ else
 fi
 test -f "$CACHE/harness/index.ts" || { echo "clone failed — aborting"; exit 1; }
 
-mkdir -p "$EXT/core/skillcards" "$PROMPTS"
-cp "$CACHE/harness/index.ts" "$EXT/harness.ts"
-cp "$CACHE/harness/core/harness-core.mjs" "$CACHE/harness/core/harness-core.test.mjs" "$CACHE/harness/core/compile-skills.mjs" "$EXT/core/"
-cp "$CACHE/harness/core/skillcards/"*.md "$EXT/core/skillcards/"
+mkdir -p "$EXT"
+rm -rf "$EXT/harness"
+cp -r "$CACHE/harness" "$EXT/harness"
+
+# Legacy flat-layout cleanup: older installs scattered the entry + core/ under
+# extensions/ and the protocol under ~/.pi/agent/prompts/. The self-contained
+# dir makes these inert — and the stray harness.ts would otherwise double-load
+# alongside the subdir entry. Only harness-owned names are removed.
+rm -f "$EXT/harness.ts" \
+      "$EXT/core/harness-core.mjs" "$EXT/core/harness-core.test.mjs" "$EXT/core/compile-skills.mjs"
+rm -rf "$EXT/core/skillcards"
+
+# Best-effort, optional: mirror run.md into pi's prompts dir so prompt-template
+# features (/run-as-template autocomplete) can find it. The harness itself reads
+# prompts/run.md from its own dir, so this is not required to run.
+mkdir -p "$PROMPTS"
 cp "$CACHE/harness/prompts/run.md" "$PROMPTS/run.md"
 
-echo "✓ harness installed (repo $(git -C "$CACHE" rev-parse --short HEAD))."
-echo "  Run /reload in pi to activate."
+echo "✓ harness installed at $EXT/harness (repo $(git -C "$CACHE" rev-parse --short HEAD))."
+echo "  Restart pi or run /reload to activate."

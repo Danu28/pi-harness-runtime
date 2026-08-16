@@ -20,7 +20,8 @@
  * Pure logic lives in harness-core.mjs (unit-testable without pi).
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -78,6 +79,12 @@ import {
   shouldStop,
   tail,
 } from "./core/harness-core.mjs";
+
+// Self-contained anchor: this extension's own directory, wherever pi loaded it
+// from (~/.pi/agent/extensions/harness/ as a subdir copy, or extensions/ flat).
+// Skill cards and the run protocol resolve relative to HERE first, so the whole
+// harness ships in one folder and install = copy that folder into place.
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Must match CORE_VERSION in harness-core.mjs. If a /reload served a stale
@@ -480,8 +487,17 @@ function loadHarnessConfig(cwd: string): Record<string, unknown> {
 }
 
 function readProtocol(): string {
+  // Self-contained first: the protocol ships inside the extension dir, so a
+  // plain copy of the harness/ folder into extensions/ needs no extra copies.
+  // The getAgentDir() mirror path covers legacy flat-layout installs.
+  const candidates = [
+    join(HERE, "prompts", "run.md"),
+    join(getAgentDir(), "prompts", "run.md"),
+  ];
+  const src = candidates.find((p) => existsSync(p));
+  if (!src) return DEFAULT_PROTOCOL;
   try {
-    const raw = readFileSync(join(getAgentDir(), "prompts", "run.md"), "utf8");
+    const raw = readFileSync(src, "utf8");
     // Strip YAML frontmatter (it is for /run-as-template autocomplete, not the LLM).
     if (raw.startsWith("---")) {
       const end = raw.indexOf("\n---", 3);
@@ -497,7 +513,8 @@ function readProtocol(): string {
  * Append a runtime skill-card as operating discipline to the protocol. The card
  * gives the model the compact process rules (~300 tok) instead of the full skill
  * (~5000 tok). The harness protocol always governs on conflict. Disable via
- * `skillCard: null` in harness.json. Cards live at ~/.pi/agent/extensions/core/skillcards/.
+ * `skillCard: null` in harness.json. Cards ship inside the extension dir
+ * (self-contained); the getAgentDir() mirror path covers legacy flat installs.
  * The verifier card at review-entry/resume is tier-gated (P3-T2): quick-tier
  * runs skip it; standard/full runs get it.
  */
@@ -509,7 +526,9 @@ function skillCardNote(cfg: Record<string, unknown>, stage?: string): string {
   const stageCard = stage ? stageSkillCard(stage) : null;
   const name = cfg.skillCard ?? stageCard ?? DEFAULT_CONFIG.skillCard;
   if (!name) return "";
-  const card = loadSkillCard(join(getAgentDir(), "extensions", "core", "skillcards"), String(name));
+  const card =
+    loadSkillCard(join(HERE, "core", "skillcards"), String(name)) ||
+    loadSkillCard(join(getAgentDir(), "extensions", "core", "skillcards"), String(name));
   if (!card) return "";
   return `\n\n## Operating discipline (skill card: ${name})\n${card}\nThe harness protocol above governs — if a card rule conflicts with it, the harness protocol wins.`;
 }
