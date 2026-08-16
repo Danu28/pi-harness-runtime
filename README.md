@@ -34,7 +34,7 @@ cp -r core ~/.pi/agent/extensions/          # adds core/harness-core.mjs, core/s
 cp prompts/run.md ~/.pi/agent/prompts/run.md
 ```
 
-**Prefer a script?** Run `bash ./install.sh` — idempotent: clones/pulls the repo into `~/.pi/agent/.extension-src/`, copies exactly the same files, nothing else.
+**Prefer a script?** Run `bash ./install.sh` — idempotent: clones/pulls the repo into `~/.pi/agent/.extension-src/`, copies exactly the same files, nothing else. Developing without pushing? `bash ./install-dev.sh` copies the same files straight from your local working tree (no clone/pull, remote untouched).
 
 Then reload — `/reload` (or restart pi). On Windows, `~` is `%USERPROFILE%`.
 
