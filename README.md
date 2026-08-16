@@ -24,22 +24,17 @@ Everything lives under one self-contained directory, `harness/` — the complete
 
 ## Install
 
-The installed copy must match pi's **mirror layout** — several paths are resolved via `getAgentDir()`, not relative to the extension (skill cards load from `~/.pi/agent/extensions/core/skillcards/`, the protocol from `~/.pi/agent/prompts/run.md`). So the repo keeps everything in one dir, `harness/`, exactly as the extension's files land under the agent dir; copy it in place:
+The harness is **self-contained**: skill cards and the `/run` protocol resolve relative to the extension's own location, so the whole thing ships in one dir. Installing is a single copy — pi auto-discovers the subdirectory entry (`~/.pi/agent/extensions/*/index.ts`):
 
 ```bash
-# 1. the extension (auto-discovered from ~/.pi/agent/extensions/*.ts)
-cp harness/index.ts ~/.pi/agent/extensions/harness.ts
-
-# 2. shared core dir (merges with anything already under extensions/core/)
-cp -r harness/core ~/.pi/agent/extensions/  # adds core/harness-core.mjs, core/skillcards/, compile-skills
-
-# 3. the /run protocol prompt (harness has an embedded fallback if skipped)
-cp harness/prompts/run.md ~/.pi/agent/prompts/run.md
+cp -r harness ~/.pi/agent/extensions/   # done — that's the whole install
 ```
 
-**Prefer a script?** Run `bash ./harness/install.sh` — idempotent: clones/pulls the repo into `~/.pi/agent/.extension-src/`, copies exactly the same files, nothing else. Developing without pushing? `bash ./harness/install-dev.sh` copies the same files straight from your local working tree (no clone/pull, remote untouched).
-
 Then reload — `/reload` (or restart pi). On Windows, `~` is `%USERPROFILE%`.
+
+The entry (`index.ts`), its core (`core/`), and the protocol (`prompts/run.md`) all travel together inside `harness/`; nothing lands in shared dirs. (Legacy flat-layout installs — entry + `core/` scattered under `extensions/`, protocol under `~/.pi/agent/prompts/` — still work via fallback paths.)
+
+**Prefer a script?** Run `bash ./harness/install.sh` — idempotent: clones/pulls the repo and clean-installs `harness/` into `~/.pi/agent/extensions/harness`, removing stale flat-layout leftovers. Developing without pushing? `bash ./harness/install-dev.sh` syncs your local `harness/` dir the same way (no clone/pull, remote untouched).
 
 Need it per-project instead? Same files, but under `.pi/extensions/` and `.pi/prompts/` in the project.
 
