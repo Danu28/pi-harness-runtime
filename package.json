@@ -7,8 +7,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test core/harness-core.test.mjs",
-    "validate-skills": "node core/compile-skills.mjs"
+    "test": "node --test harness/core/harness-core.test.mjs",
+    "validate-skills": "node harness/core/compile-skills.mjs"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.2",

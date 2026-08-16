@@ -15,5 +15,5 @@
       "typebox": ["./node_modules/@earendil-works/pi-coding-agent/node_modules/typebox"]
     }
   },
-  "include": ["harness.ts"]
+  "include": ["harness/index.ts"]
 }

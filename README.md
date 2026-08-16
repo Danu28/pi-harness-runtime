@@ -8,33 +8,36 @@ The discipline is enforced in **code**, not prose: the verify command runs after
 
 ## What's inside (the runtime set)
 
+Everything lives under one self-contained directory, `harness/` — the complete extension as a single drop-in unit (create-pi-extension style: `index.ts` entry + its modules bundled alongside):
+
 | File | Role |
 |------|------|
-| `harness.ts` | The extension: registers `/run`, `/harness-resume`, `/harness-reset`, `/harness-stats`, `/harness-clean-temp`, the `harness_declare`/`harness_review` tools, and the gate/telemetry machinery |
-| `core/harness-core.mjs` | All pure logic (scoring, scope checks, budget ladder, snapshot/tldr, auto-commit) — unit-testable without pi |
-| `core/skillcards/*.md` | **Runtime skill cards** — compact (~300–500 token) versions of the planner/builder/reviewer/verifier/shared-project-memory skills that the harness injects into the run protocol |
-| `core/harness-core.test.mjs` | 54 unit tests for the core (zero deps, `node --test`) |
-| `core/compile-skills.mjs` | Card validator — enforces a card exists + token budget, cross-checks against full `SKILL.md` sources when a skills root is present |
-| `prompts/run.md` | The `/run` protocol prompt (task/snapshot/persona markers) — read by the harness at runtime |
+| `harness/index.ts` | The extension: registers `/run`, `/harness-resume`, `/harness-reset`, `/harness-stats`, `/harness-clean-temp`, the `harness_declare`/`harness_review` tools, and the gate/telemetry machinery |
+| `harness/core/harness-core.mjs` | All pure logic (scoring, scope checks, budget ladder, snapshot/tldr, auto-commit) — unit-testable without pi |
+| `harness/core/skillcards/*.md` | **Runtime skill cards** — compact (~300–500 token) versions of the planner/builder/reviewer/verifier/shared-project-memory skills that the harness injects into the run protocol |
+| `harness/core/harness-core.test.mjs` | 54 unit tests for the core (zero deps, `node --test`) |
+| `harness/core/compile-skills.mjs` | Card validator — enforces a card exists + token budget, cross-checks against full `SKILL.md` sources when a skills root is present |
+| `harness/prompts/run.md` | The `/run` protocol prompt (task/snapshot/persona markers) — read by the harness at runtime |
+| `harness/install.sh` · `harness/install-dev.sh` | Idempotent installers — clone/pull or local-sync the extension into the live agent dir |
 
-> **About the skills — nothing is missing.** The 5 cards in `core/skillcards/` are the full operating discipline: they're what the dev loop injects and `compile-skills.mjs` validates. The long-form `SKILL.md` sources are intentionally not shipped — loading ~1,300–3,800-token templates into every agent context recreates the exact "skills fill context" leak this design removes (13,244 → 1,898 tokens). The harness never reads them at runtime; want them, or your own skills? Drop them in `~/.pi/agent/skills/<name>/SKILL.md` — the validator still passes on machines without that root.
+> **About the skills — nothing is missing.** The 5 cards in `harness/core/skillcards/` are the full operating discipline: they're what the dev loop injects and `compile-skills.mjs` validates. The long-form `SKILL.md` sources are intentionally not shipped — loading ~1,300–3,800-token templates into every agent context recreates the exact "skills fill context" leak this design removes (13,244 → 1,898 tokens). The harness never reads them at runtime; want them, or your own skills? Drop them in `~/.pi/agent/skills/<name>/SKILL.md` — the validator still passes on machines without that root.
 
 ## Install
 
-The harness assumes pi's **mirror layout** — several paths are resolved via `getAgentDir()`, not relative to the extension (skill cards load from `~/.pi/agent/extensions/core/skillcards/`, the protocol from `~/.pi/agent/prompts/run.md`). So the repo is laid out exactly as the files live under the agent dir; copy it in place:
+The installed copy must match pi's **mirror layout** — several paths are resolved via `getAgentDir()`, not relative to the extension (skill cards load from `~/.pi/agent/extensions/core/skillcards/`, the protocol from `~/.pi/agent/prompts/run.md`). So the repo keeps everything in one dir, `harness/`, exactly as the extension's files land under the agent dir; copy it in place:
 
 ```bash
 # 1. the extension (auto-discovered from ~/.pi/agent/extensions/*.ts)
-cp harness.ts ~/.pi/agent/extensions/harness.ts
+cp harness/index.ts ~/.pi/agent/extensions/harness.ts
 
 # 2. shared core dir (merges with anything already under extensions/core/)
-cp -r core ~/.pi/agent/extensions/          # adds core/harness-core.mjs, core/skillcards/, compile-skills
+cp -r harness/core ~/.pi/agent/extensions/  # adds core/harness-core.mjs, core/skillcards/, compile-skills
 
 # 3. the /run protocol prompt (harness has an embedded fallback if skipped)
-cp prompts/run.md ~/.pi/agent/prompts/run.md
+cp harness/prompts/run.md ~/.pi/agent/prompts/run.md
 ```
 
-**Prefer a script?** Run `bash ./install.sh` — idempotent: clones/pulls the repo into `~/.pi/agent/.extension-src/`, copies exactly the same files, nothing else. Developing without pushing? `bash ./install-dev.sh` copies the same files straight from your local working tree (no clone/pull, remote untouched).
+**Prefer a script?** Run `bash ./harness/install.sh` — idempotent: clones/pulls the repo into `~/.pi/agent/.extension-src/`, copies exactly the same files, nothing else. Developing without pushing? `bash ./harness/install-dev.sh` copies the same files straight from your local working tree (no clone/pull, remote untouched).
 
 Then reload — `/reload` (or restart pi). On Windows, `~` is `%USERPROFILE%`.
 
@@ -104,9 +107,9 @@ No `harness.json` → the harness scans `package.json` scripts + language-specif
 
 ```bash
 npm install    # dev deps: pi types, typescript, @types/node
-npm test       # 54 unit tests for core/harness-core.mjs (node --test)
+npm test       # 54 unit tests for harness/core/harness-core.mjs (node --test)
 npm run typecheck
-node core/compile-skills.mjs   # validate the injected skill cards (token budget + source cross-check)
+node harness/core/compile-skills.mjs   # validate the injected skill cards (token budget + source cross-check)
 ```
 
 The full dev suite — E2E trial runs (`core/trial-runner.mjs`, `tests/harness/`), doc checkers, fixtures — lives in the [pi-harness](https://github.com/Danu28/pi-harness) repository.

@@ -13,10 +13,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXT="$HOME/.pi/agent/extensions"
 PROMPTS="$HOME/.pi/agent/prompts"
 
-test -f "$HERE/harness.ts" || { echo "install-dev.sh must live in the repo root — aborting"; exit 1; }
+test -f "$HERE/index.ts" || { echo "install-dev.sh must live in the repo root (harness/) — aborting"; exit 1; }
 
 mkdir -p "$EXT/core/skillcards" "$PROMPTS"
-cp "$HERE/harness.ts" "$EXT/harness.ts"
+cp "$HERE/index.ts" "$EXT/harness.ts"
 cp "$HERE/core/harness-core.mjs" "$HERE/core/harness-core.test.mjs" "$HERE/core/compile-skills.mjs" "$EXT/core/"
 cp "$HERE/core/skillcards/"*.md "$EXT/core/skillcards/"
 cp "$HERE/prompts/run.md" "$PROMPTS/run.md"

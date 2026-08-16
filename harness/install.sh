@@ -23,13 +23,13 @@ if [ -d "$CACHE/.git" ]; then
 else
   git clone --depth 1 "$REPO" "$CACHE"
 fi
-test -f "$CACHE/harness.ts" || { echo "clone failed — aborting"; exit 1; }
+test -f "$CACHE/harness/index.ts" || { echo "clone failed — aborting"; exit 1; }
 
 mkdir -p "$EXT/core/skillcards" "$PROMPTS"
-cp "$CACHE/harness.ts" "$EXT/harness.ts"
-cp "$CACHE/core/harness-core.mjs" "$CACHE/core/harness-core.test.mjs" "$CACHE/core/compile-skills.mjs" "$EXT/core/"
-cp "$CACHE/core/skillcards/"*.md "$EXT/core/skillcards/"
-cp "$CACHE/prompts/run.md" "$PROMPTS/run.md"
+cp "$CACHE/harness/index.ts" "$EXT/harness.ts"
+cp "$CACHE/harness/core/harness-core.mjs" "$CACHE/harness/core/harness-core.test.mjs" "$CACHE/harness/core/compile-skills.mjs" "$EXT/core/"
+cp "$CACHE/harness/core/skillcards/"*.md "$EXT/core/skillcards/"
+cp "$CACHE/harness/prompts/run.md" "$PROMPTS/run.md"
 
 echo "✓ harness installed (repo $(git -C "$CACHE" rev-parse --short HEAD))."
 echo "  Run /reload in pi to activate."
