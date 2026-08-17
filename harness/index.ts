@@ -48,6 +48,7 @@ import {
   editMismatchHint,
   mismatchedEditIndices,
   EDIT_MISS_RE,
+  estimateTokens,
   gateResult,
   insideProject,
   isIgnored,
@@ -58,6 +59,7 @@ import {
   phaseThinking,
   renderPersona,
   statsRows,
+  summarizeToolOutput,
   tasklistEnabled,
   normalizeRel,
   parseLanePrediction,
@@ -199,6 +201,7 @@ interface RunState {
     warnedCost50: boolean;
     knownFiles: string[];
     pendingNewFiles?: string[];
+    skillCardTokens?: number; // idea #1: operating-discipline card tokens injected this run
     peakTurnCost: number;
     finalGate?: { ok: boolean };
     finalFull?: { ok: boolean };
@@ -540,7 +543,7 @@ function readProtocol(): string {
  * The verifier card at review-entry/resume is tier-gated (P3-T2): quick-tier
  * runs skip it; standard/full runs get it.
  */
-function skillCardNote(cfg: Record<string, unknown>, stage?: string): string {
+function skillCardNote(cfg: Record<string, unknown>, stage?: string, stats?: { skillCardTokens?: number }): string {
   // The card follows the active stage (revised-plan A7); fall back to the
   // configured skillCard (or the builder default) only when the stage has no
   // mapped card. A explicit config `skillCard: <name>` always wins over the
@@ -552,6 +555,9 @@ function skillCardNote(cfg: Record<string, unknown>, stage?: string): string {
     loadSkillCard(join(HERE, "core", "skillcards"), String(name)) ||
     loadSkillCard(join(getAgentDir(), "extensions", "core", "skillcards"), String(name));
   if (!card) return "";
+  // Idea #1 telemetry: count the injected card's tokens (advisory — the report
+  // shows how much context the operating-discipline card costs per run).
+  if (stats) stats.skillCardTokens = (stats.skillCardTokens ?? 0) + estimateTokens(card);
   return `\n\n## Operating discipline (skill card: ${name})\n${card}\nThe harness protocol above governs — if a card rule conflicts with it, the harness protocol wins.`;
 }
 
@@ -817,7 +823,7 @@ export default function harness(pi: ExtensionAPI) {
       // waitForIdle() right after sendUserMessage returns immediately — wait
       // for the agent_settled EVENT instead, with a generous safety cap.
       try {
-        pi.sendUserMessage(prompt + skillCardNote(cfg, run.phase === "ideate" ? "ideation" : "planning"));
+        pi.sendUserMessage(prompt + skillCardNote(cfg, run.phase === "ideate" ? "ideation" : "planning", run.stats));
       } catch (err) {
         finishRun(run, pi);
         ctx.ui.notify(`Harness: failed to start run — ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -933,7 +939,7 @@ export default function harness(pi: ExtensionAPI) {
 
       const cfg = loadHarnessConfig(run.cwd);
       // An ideate-phase run in the planning stage gets the brainstormer card.
-      let card = skillCardNote(cfg, run.phase === "ideate" && run.stage === "planning" ? "ideation" : run.stage);
+      let card = skillCardNote(cfg, run.phase === "ideate" && run.stage === "planning" ? "ideation" : run.stage, run.stats);
       // P3-T2: quick-tier runs skip the verifier card even on mid-review resume
       // (consistent with the one-shot review-entry wiring above).
       if (run.stage === "review" && (run.verifyTier ?? "standard") === "quick") card = "";
@@ -1234,7 +1240,7 @@ export default function harness(pi: ExtensionAPI) {
       // runs skip it (the build-boundary gate + one-shot review line is their
       // check), saving ~430 tok on the common S-lane path.
       const reviewCard =
-        (accNote + revNote + memNote) + (tier === "quick" ? "" : skillCardNote(loadHarnessConfig(run.cwd), "review"));
+        (accNote + revNote + memNote) + (tier === "quick" ? "" : skillCardNote(loadHarnessConfig(run.cwd), "review", run.stats));
       return {
         content: [
           {
@@ -1372,14 +1378,30 @@ export default function harness(pi: ExtensionAPI) {
     // gate below still fires; this adds a byte-level diff hint to the same coach
     // rail so a whitespace/invisible-char mismatch is fixed in one shot.
     const editHint = editCoachForEvent(run, event);
+    // Idea #4: budget bash tool output before it re-enters the next model call.
+    // Truncation runs FIRST, on the tool's own content only; the gate coach is
+    // appended below, AFTER — so it can never be eaten by the budget. The full
+    // output is archived to .harness/temp/ so the model can read it on demand.
+    let parts = Array.isArray(event.content) ? [...event.content] : [];
+    let truncated = false;
+    if (event.toolName === "bash") {
+      const res = maybeTruncateBashOutput(run, event, parts);
+      if (res !== null) {
+        parts = [{ type: "text", text: res }];
+        truncated = true;
+      }
+    }
     if (event.toolName !== "edit" && event.toolName !== "write") {
       // Gate bash results too when the command plausibly wrote to the project
       // (builds, installs, redirects, git mutations) so a command-line fix is
       // verified mid-run, not only at completion.
       const bcmd = String((event.input as { command?: string } | undefined)?.command ?? "");
-      if (!(event.toolName === "bash" && bashMutates(bcmd))) return;
+      if (!(event.toolName === "bash" && bashMutates(bcmd))) {
+        // No gate for this result — still return the patch when we truncated.
+        return truncated ? { content: parts } : undefined;
+      }
     }
-    if (!run.verifyCmd) return; // degraded mode — no gate
+    if (!run.verifyCmd) return truncated ? { content: parts } : undefined; // degraded mode — no gate
 
     const r = gateResult(run.verifyCmd, run.verifyCwd ?? run.cwd, run.timeoutMs);
     run.stats.gateRuns++;
@@ -1453,10 +1475,40 @@ export default function harness(pi: ExtensionAPI) {
     if (editHint) coach += editHint;
     writeRun(run);
 
-    const parts = Array.isArray(event.content) ? [...event.content] : [];
     const text = `\n[GATE ${r.ok ? "PASS" : "FAIL"} — ${run.verifyCmd}\n${r.output}]${coach}`;
     return { content: [...parts, { type: "text", text }] };
   });
+
+/** Idea #4: shrink bash tool output to the configured token budget. Returns the
+ *  new single-block text when truncated (full output archived under
+ *  .harness/temp/), or null to keep the result as-is. Uses pi's own truncation
+ *  note when present; otherwise summarizes head + tail + error lines.
+ */
+function maybeTruncateBashOutput(
+  run: RunState,
+  event: { toolCallId?: string; isError?: boolean },
+  parts: readonly { type: string; text?: string }[],
+): string | null {
+  const cfg = loadHarnessConfig(run.cwd);
+  // null/undefined → default; explicit 0/null in harness.json → disabled.
+  const budget = cfg.toolOutputTokens !== undefined ? cfg.toolOutputTokens : DEFAULT_CONFIG.toolOutputTokens;
+  if (typeof budget !== "number" || budget <= 0) return null;
+  const full = parts
+    .map((p) => (p.type === "text" && p.text ? p.text : ""))
+    .join("\n")
+    .trimEnd();
+  if (!full) return null;
+  const r = summarizeToolOutput(full, budget, { note: event.isError ? "isError" : "" });
+  if (!r.truncated) return null;
+  const logPath = join(run.cwd, ".harness", "temp", `tool-${event.toolCallId ?? Date.now()}.log`);
+  try {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(logPath, full);
+  } catch {
+    /* best-effort archive — truncation still applies */
+  }
+  return r.text;
+}
 
   // ---- telemetry ----------------------------------------------------------
   pi.on("turn_start", () => {

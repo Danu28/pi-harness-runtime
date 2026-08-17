@@ -28,6 +28,12 @@ export const DEFAULT_CONFIG = {
   // as operating discipline. Set to null/false to disable. The harness protocol
   // always governs on conflict.
   skillCard: "builder",
+  // Tool-output token budget (idea #4): bash tool results larger than this are
+  // summarized (head + tail + error lines) before re-injection into context; the
+  // full output is archived under .harness/temp/. pi's own bash tool already
+  // tail-truncates at 2000 lines/50KB (~12.5K tokens) — this tightens the
+  // re-injected result to a token budget. null/0 disables.
+  toolOutputTokens: 3000,
   thinkingStart: "low",
   thinkingEscalated: "high",
   strict: true,
@@ -1283,6 +1289,59 @@ export function tail(text, maxLines) {
     .join("\n");
 }
 
+/** Rough token estimate (chars/4) — mirrors compile-skills.mjs's local copy. */
+export function estimateTokens(text) {
+  return Math.ceil(String(text ?? "").length / 4);
+}
+
+// Tool-output token budget (idea #4): pi's bash tool tail-truncates at 2000
+// lines/50KB before the result even reaches the harness, but ~12.5K tokens is
+// still a lot to re-inject on every following model call. This shrinks the
+// result further to a token budget while keeping what the model actually needs:
+// the head, the tail (where build errors land), matching error lines, and a
+// marker pointing at the archived full output.
+const TOOL_ERR_RE = /error|failed|fail|exception|fatal|✖/i;
+const TOOL_SKIP_RE = /^ok\b|passed|passing|0 errors?|errors?:\s*0\b|^\s*ℹ/;
+
+/**
+ * Summarize a tool-output text to a token budget. Pure; unit-tested.
+ * Under/at budget (or disabled via budget 0/null) → passthrough.
+ * Over budget → head + "omitted" note + error lines + tail + marker.
+ * Returns { text, truncated, before, after }.
+ */
+export function summarizeToolOutput(text, budget, { headLines = 12, tailLines = 12, maxErrorLines = 10, note = "" } = {}) {
+  const src = String(text ?? "");
+  const before = estimateTokens(src);
+  if (budget == null || budget <= 0 || before <= budget) {
+    return { text: src, truncated: false, before, after: before };
+  }
+  const lines = src.split("\n");
+  const head = lines.slice(0, headLines);
+  const tail = lines.slice(-tailLines);
+  const errs = [];
+  const seen = new Set();
+  for (const ln of lines) {
+    const l = ln.trim();
+    if (!l || l.length > 300) continue;
+    if (TOOL_SKIP_RE.test(l)) continue;
+    if (TOOL_ERR_RE.test(l) && !seen.has(l)) {
+      seen.add(l);
+      errs.push(l.slice(0, 160));
+      if (errs.length >= maxErrorLines) break;
+    }
+  }
+  const omitted = lines.length - head.length - tail.length;
+  const parts = [head.join("\n")];
+  if (omitted > 0) parts.push(`... (${omitted} lines omitted)`);
+  if (errs.length) parts.push("[error lines]", ...errs);
+  if (omitted > 0) parts.push("...");
+  parts.push(tail.join("\n"));
+  const out = parts.join("\n");
+  const after = estimateTokens(out);
+  const mark = `[truncated: ${before}→${after} tok${note ? `, ${note}` : ""}; full output archived at .harness/temp]`;
+  return { text: `${mark}\n${out}`, truncated: true, before, after: estimateTokens(`${mark}\n${out}`) };
+}
+
 // Structured gate output (v1.13): instead of only a raw tail, the gate now
 // surfaces the specific failing lines (test names, tsc errors) so the model
 // doesn't have to grep for the real failure inside truncated output.
@@ -1772,6 +1831,9 @@ export function reportRows(run) {
     ["verify", run.verifyLabel ?? "none", verifyMeaning(run)],
     ["baseline", run.baseline ? (run.baseline.ok ? "GREEN" : "RED") : "N/A", "pre-run state"],
   );
+  if (st.skillCardTokens) {
+    rows.push(["skill cards", `${st.skillCardTokens} tok`, "operating-discipline card tokens injected this run"]);
+  }
   // Ideation phase row: shown only for ideate runs (or a set gate 1 verdict), so
   // the default implement path's report stays clean.
   if (run.phase === "ideate" || run.plan?.gate1) {

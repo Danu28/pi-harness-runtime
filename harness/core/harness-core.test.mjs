@@ -34,11 +34,13 @@ import {
   extractFailures,
   editMismatchHint,
   EDIT_MISS_RE,
+  estimateTokens,
   mismatchedEditIndices,
   checkFailureMemory,
   suggestBudget,
   parsePlanProgress,
   stageSkillCard,
+  summarizeToolOutput,
   verifyTier,
   ensureArtifactDirs,
   clearTempDir,
@@ -336,6 +338,53 @@ test("stageSkillCard maps run stages to operating-discipline cards", () => {
   assert.equal(stageSkillCard("unknown"), null);
   assert.equal(stageSkillCard(""), null);
   assert.equal(stageSkillCard(null), null);
+});
+
+// Idea #1 (phase-scoped cards) residual gap: every stage the dev loop actually
+// runs must map to a card, so none silently falls back to the builder default.
+test("every run stage maps to a non-null skill card (no default fallback)", () => {
+  const stages = ["ideation", "requirements", "plan", "plan-review", "development", "build", "review", "verify"];
+  for (const s of stages) assert.ok(stageSkillCard(s), `stage "${s}" must map to a card`);
+});
+
+// Idea #4: tool-output token budget — summarizeToolOutput.
+test("summarizeToolOutput passes through under budget", () => {
+  const r = summarizeToolOutput("hello world", 100);
+  assert.equal(r.truncated, false);
+  assert.equal(r.text, "hello world");
+  assert.equal(r.before, estimateTokens("hello world"));
+  assert.equal(r.after, r.before);
+});
+
+test("summarizeToolOutput passes through at the exact budget boundary", () => {
+  const text = "abcd".repeat(10); // 40 chars = 10 tok
+  assert.equal(estimateTokens(text), 10);
+  const r = summarizeToolOutput(text, 10);
+  assert.equal(r.truncated, false);
+  assert.equal(r.text, text);
+});
+
+test("summarizeToolOutput truncates over budget keeping head, tail, and error lines", () => {
+  const lines = ["L1", "L2", "boom: something failed", ...Array.from({ length: 40 }, (_, i) => `line ${i}`), "END1", "END2"];
+  const r = summarizeToolOutput(lines.join("\n"), 10);
+  assert.equal(r.truncated, true);
+  assert.ok(r.after < r.before, "truncated text must be smaller");
+  assert.match(r.text, /L1/); // head kept
+  assert.match(r.text, /END2/); // tail kept
+  assert.match(r.text, /boom: something failed/); // error line kept
+  assert.match(r.text, /\[truncated:/); // marker present
+  assert.match(r.text, /\(\d+ lines omitted\)/); // omission noted
+});
+
+test("summarizeToolOutput is disabled by budget 0 or null", () => {
+  const big = "x\n".repeat(5000);
+  assert.equal(summarizeToolOutput(big, 0).truncated, false);
+  assert.equal(summarizeToolOutput(big, null).truncated, false);
+});
+
+test("summarizeToolOutput marker carries a caller note (isError)", () => {
+  const r = summarizeToolOutput("y\n".repeat(100), 5, { note: "isError" });
+  assert.match(r.text, /\[truncated:[^\]]*isError/);
 });
 
 test("verifyTier selects quick/standard/full from lane + plan footprint", () => {

@@ -20,7 +20,7 @@ Everything lives under one self-contained directory, `harness/` — the complete
 | `harness/prompts/run.md` | The `/run` protocol prompt (task/snapshot/persona markers) — read by the harness at runtime |
 | `harness/install.sh` · `harness/install-dev.sh` | Idempotent installers — clone/pull or local-sync the extension into the live agent dir |
 
-> **About the skills — nothing is missing.** The 6 cards in `harness/core/skillcards/` are the full operating discipline: they're what the dev loop injects and `compile-skills.mjs` validates. The long-form `SKILL.md` sources are intentionally not shipped — loading ~1,300–3,800-token templates into every agent context recreates the exact "skills fill context" leak this design removes (14,362 → 2,245 tokens). The harness never reads them at runtime; want them, or your own skills? Drop them in `~/.pi/agent/skills/<name>/SKILL.md` — the validator still passes on machines without that root.
+> **About the skills — nothing is missing.** The 6 cards in `harness/core/skillcards/` are the full operating discipline: they're what the dev loop injects and `compile-skills.mjs` validates. The injected card is **phase-scoped** — the planner card while planning, builder while building, verifier while verifying, reviewer at plan/review gates (override via `skillCard` in `harness.json`; unmapped stages fall back to the configured default). The long-form `SKILL.md` sources are intentionally not shipped — loading ~1,300–3,800-token templates into every agent context recreates the exact "skills fill context" leak this design removes (14,362 → 2,245 tokens). The harness never reads them at runtime; want them, or your own skills? Drop them in `~/.pi/agent/skills/<name>/SKILL.md` — the validator still passes on machines without that root.
 
 ## Install
 
@@ -91,6 +91,11 @@ Two cheap correctness/cost refinements are built in:
   **structured** — kind-aware failing-test/error lines are surfaced ahead of the tail, so the
   model sees the actual failure instead of grepping truncated output. A cross-run **trend hint**
   (median turns over recent runs) is surfaced at run start when the budget looks mis-sized.
+- **Tool-output token budget** — bash tool results are summarized to a token budget (head +
+  tail + error lines, with the full output archived under `.harness/temp/`) before they're
+  re-injected into the next model call, so large command output can't inflate every following
+  turn. Configurable via `toolOutputTokens` in `harness.json` (`0`/`null` disables); tightens
+  pi's own 50KB bash truncation to a tighter token budget.
 
 ### Ideation phase (`--phase ideate`)
 For "come up with ideas/features" requests, run `/run --phase ideate <task>` (or the
