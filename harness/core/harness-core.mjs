@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-export const CORE_VERSION = "1.13.0";
+export const CORE_VERSION = "1.13.1";
 
 export const DEFAULT_CONFIG = {
   verifyCmd: null, // override; auto-detected from package.json scripts otherwise
@@ -1312,6 +1312,134 @@ export function extractFailures(text, kind = "custom") {
       seen.add(l);
       out.push(l.slice(0, 160));
     }
+  }
+  return out;
+}
+
+// Edit-mismatch marker: both error variants pi's edit tool emits on an oldText
+// miss — batch form "Could not find edits[N] in <file>", single-edit form
+// "Could not find the exact text in <file>".
+export const EDIT_MISS_RE = /could not find (?:the exact text|edits\[\d+\])/i;
+
+// Edit-mismatch coach (v1.13.1): the edit tool fails with a byte-exact
+// "Could not find oldText" error and gives no diagnostics. These helpers
+// simulate the tool's atomic batch matching and locate the intended block in
+// the target file, reporting the EXACT byte diff — indent count, tabs-vs-
+// spaces, CRLF-vs-LF, invisible chars (em-dash, curly quotes, NBSP) — so the
+// model fixes the mismatch in one shot instead of blind retries.
+const countLead = (s) => {
+  let sp = 0;
+  let tb = 0;
+  for (const ch of s) {
+    if (ch === " ") sp++;
+    else if (ch === "\t") tb++;
+    else break;
+  }
+  return { sp, tb };
+};
+const lineClose = (a, b) => {
+  if (a === b) return true;
+  const n = Math.min(a.length, b.length);
+  let d = 0;
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) d++;
+  return d + Math.abs(a.length - b.length) <= Math.max(1, Math.floor(Math.max(a.length, b.length) * 0.25));
+};
+const leadRepr = (s) => {
+  const { sp, tb } = countLead(String(s));
+  if (!sp && !tb) return "no indent";
+  const parts = [];
+  if (tb) parts.push(`${tb} tab${tb > 1 ? "s" : ""}`);
+  if (sp) parts.push(`${sp} space${sp > 1 ? "s" : ""}`);
+  return parts.join(" + ");
+};
+
+/** Byte-diff one file line against the intended oldText line (null when byte-equal). */
+function lineDiff(target, intent) {
+  if (target === intent) return null;
+  const tLead = countLead(target);
+  const iLead = countLead(intent);
+  if (tLead.sp !== iLead.sp || tLead.tb !== iLead.tb) {
+    return `indent mismatch: file has ${leadRepr(target)}, oldText has ${leadRepr(intent)}`;
+  }
+  if (target.endsWith("\r") !== intent.endsWith("\r")) {
+    return `line ending: file uses ${target.endsWith("\r") ? "CRLF" : "LF"}, oldText uses ${intent.endsWith("\r") ? "CRLF" : "LF"}`;
+  }
+  const n = Math.min(target.length, intent.length);
+  for (let i = 0; i < n; i++) {
+    if (target[i] !== intent[i]) {
+      const a = target[i];
+      const b = intent[i];
+      const cp = (c) => `U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
+      return `char ${i + 1}: file has ${JSON.stringify(a)} (${cp(a)}), oldText has ${JSON.stringify(b)} (${cp(b)})`;
+    }
+  }
+  return `length differs after ${JSON.stringify(target.slice(0, n))} (file ${target.length} chars, oldText ${intent.length})`;
+}
+
+/** Given a file's text and an oldText that FAILED to match, find the best
+ *  whitespace-normalized anchor in the file and report what differs, or null
+ *  when nothing is close (wrong file/region — stay silent rather than guess). */
+export function editMismatchHint(fileText, oldText) {
+  const f = String(fileText ?? "").split("\n");
+  const o = String(oldText ?? "").split("\n");
+  if (o.length > 1 && o[o.length - 1] === "") o.pop(); // trailing newline
+  if (!o.length || o.every((l) => !l.trim())) return null;
+  const norm = (l) => l.replace(/\s+/g, " ").trim();
+  const nf = f.map(norm);
+  const no = o.map(norm);
+  if (o.length > f.length) {
+    return `your oldText has ${o.length} lines but the file only has ${f.length} lines`;
+  }
+  let best = null;
+  for (let i = 0; i + o.length <= f.length; i++) {
+    let score = 0;
+    for (let j = 0; j < o.length; j++) if (no[j] === nf[i + j]) score++;
+    if (!best || score > best.score) best = { i, score };
+    if (score === o.length) break;
+  }
+  if (!best || best.score === 0) {
+    // No whitespace-normalized exact hit — retry with fuzzy line closeness:
+    // an invisible char (em-dash vs hyphen, curly quotes) is NOT whitespace,
+    // so it changes the norm; the byte-diff below still pinpoints it.
+    best = null;
+    for (let i = 0; i + o.length <= f.length; i++) {
+      let score = 0;
+      for (let j = 0; j < o.length; j++) if (lineClose(nf[i + j], no[j])) score++;
+      if (!best || score > best.score) best = { i, score };
+    }
+    if (!best || best.score === 0) return null;
+  }
+  const diags = [];
+  for (let j = 0; j < o.length && diags.length < 2; j++) {
+    const d = lineDiff(f[best.i + j], o[j]);
+    if (d) diags.push(`block line ${j + 1} (file line ${best.i + j + 1}): ${d}`);
+  }
+  if (!diags.length) return null;
+  const near =
+    best.score === o.length
+      ? `your ${o.length}-line block matches at file lines ${best.i + 1}–${best.i + o.length}: `
+      : `best match for ${o.length}-line block at file lines ${best.i + 1}–${best.i + o.length} (${best.score}/${o.length} lines close): `;
+  return near + diags.join("; ");
+}
+
+/** Simulate the edit tool's atomic batch matching: apply edits in order and
+ *  return the indices whose oldText is not found (stops at the first miss,
+ *  mirroring the tool's whole-call rejection). */
+export function mismatchedEditIndices(fileText, edits) {
+  const out = [];
+  let s = String(fileText ?? "");
+  const list = Array.isArray(edits) ? edits : [];
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    const oldText = typeof e?.oldText === "string" ? e.oldText : "";
+    if (!oldText) continue;
+    const idx = s.indexOf(oldText);
+    if (idx === -1) {
+      out.push(i);
+      break;
+    }
+    const newText = typeof e?.newText === "string" ? e.newText : "";
+    s = s.slice(0, idx) + newText + s.slice(idx + oldText.length);
   }
   return out;
 }

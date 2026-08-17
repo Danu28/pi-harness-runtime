@@ -32,6 +32,9 @@ import {
   parseAcceptance,
   stripAcceptanceBlocks,
   extractFailures,
+  editMismatchHint,
+  EDIT_MISS_RE,
+  mismatchedEditIndices,
   checkFailureMemory,
   suggestBudget,
   parsePlanProgress,
@@ -1051,4 +1054,83 @@ test("reportRows: unmet acceptance flags the report and the skip reason", () => 
   const rows = reportRows(base);
   assert.equal(rows.find((r) => r[0] === "acceptance")[2], "model reports acceptance NOT met");
   assert.ok(rows.find((r) => r[0] === "auto-commit")[2].includes("acceptance unmet"));
+});
+
+test("editMismatchHint — the classic 12-vs-8 space indent mismatch", () => {
+  const file = "line a\n        details: x\n      text: y\n";
+  const oldText = "line a\n            details: x\n      text: y\n";
+  const h = editMismatchHint(file, oldText);
+  assert.ok(h);
+  assert.match(h, /indent mismatch/);
+  assert.match(h, /8 spaces/);
+  assert.match(h, /12 spaces/);
+  assert.match(h, /file line 2/);
+});
+
+test("editMismatchHint — tab vs spaces on the same slab", () => {
+  const h = editMismatchHint("\tconst a = 1;\n", "  const a = 1;\n");
+  assert.ok(h);
+  assert.match(h, /indent mismatch/);
+  assert.match(h, /tab/);
+});
+
+test("editMismatchHint — CRLF vs LF line ending", () => {
+  const h = editMismatchHint("line1\nline2\r\nline3\n", "line2\n");
+  assert.ok(h);
+  assert.match(h, /CRLF/);
+});
+
+test("editMismatchHint — invisible char diff reports both codepoints", () => {
+  const h = editMismatchHint("note — dash here\n", "note - dash here\n");
+  assert.ok(h);
+  assert.match(h, /U\+2014/);
+  assert.match(h, /U\+002D/);
+});
+
+test("editMismatchHint — oldText block longer than the file", () => {
+  const h = editMismatchHint("a\nb\nc", "a\nb\nC NEW\nc\n");
+  assert.ok(h);
+  assert.match(h, /4 lines but the file only has 3/);
+});
+
+test("editMismatchHint — no near match returns null", () => {
+  const h = editMismatchHint("totally different content\n", "zzz none of this exists\n");
+  assert.equal(h, null);
+});
+
+test("editMismatchHint — byte-equal block returns null (no mismatch to report)", () => {
+  const h = editMismatchHint("const a = 1;\nconst b = 2;\n", "const a = 1;\n");
+  assert.equal(h, null);
+});
+
+test("mismatchedEditIndices — batch stops at the first missing oldText (atomic)", () => {
+  const file = "a\nb\nc\n";
+  const edits = [
+    { oldText: "a\n", newText: "A\n" },
+    { oldText: "zz\n", newText: "Z\n" },
+    { oldText: "b\n", newText: "B\n" },
+  ];
+  assert.deepEqual(mismatchedEditIndices(file, edits), [1]);
+});
+
+test("mismatchedEditIndices — prior edits apply so a later match can depend on them", () => {
+  const edits = [
+    { oldText: "a\n", newText: "a\nb\n" },
+    { oldText: "b\n", newText: "B\n" },
+  ];
+  assert.deepEqual(mismatchedEditIndices("a\n", edits), []);
+});
+
+test("mismatchedEditIndices — all present returns empty", () => {
+  const edits = [
+    { oldText: "a\n", newText: "A\n" },
+    { oldText: "b\n", newText: "B\n" },
+  ];
+  assert.deepEqual(mismatchedEditIndices("a\nb\n", edits), []);
+});
+
+test("edit-mismatch marker regex catches both edit-tool miss variants", () => {
+  assert.ok(EDIT_MISS_RE.test("Could not find edits[3] in harness/index.ts."), "batch edits[N] form");
+  assert.ok(EDIT_MISS_RE.test("Could not find the exact text in harness/index.ts."), "single-edit form");
+  assert.ok(!EDIT_MISS_RE.test("Successfully replaced 1 block(s) in x."), "success path stays silent");
 });

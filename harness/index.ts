@@ -45,6 +45,9 @@ import {
   extendBudget,
   loadEstimateBias,
   detectVerify,
+  editMismatchHint,
+  mismatchedEditIndices,
+  EDIT_MISS_RE,
   gateResult,
   insideProject,
   isIgnored,
@@ -95,7 +98,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * own transforms), the mismatch catches it and /run explains instead of
  * crashing with a cryptic "X is not a function".
  */
-const EXPECTED_CORE_VERSION = "1.13.0";
+const EXPECTED_CORE_VERSION = "1.13.1";
 let staleCore = CORE_VERSION !== EXPECTED_CORE_VERSION;
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -1365,6 +1368,10 @@ export default function harness(pi: ExtensionAPI) {
     // way bashMutates() didn't flag — mark dirty so the review-gate dedup never
     // reuses a stale-green result. The gate below clears it once it re-verifies.
     if (event.toolName === "bash") run.stats.gateDirty = true;
+    // v1.13.1: edit-mismatch coach — when the edit tool can't find oldText, the
+    // gate below still fires; this adds a byte-level diff hint to the same coach
+    // rail so a whitespace/invisible-char mismatch is fixed in one shot.
+    const editHint = editCoachForEvent(run, event);
     if (event.toolName !== "edit" && event.toolName !== "write") {
       // Gate bash results too when the command plausibly wrote to the project
       // (builds, installs, redirects, git mutations) so a command-line fix is
@@ -1443,6 +1450,7 @@ export default function harness(pi: ExtensionAPI) {
       coach += `\nHARNESS new files: ${run.stats.pendingNewFiles.join(", ")}.`;
       run.stats.pendingNewFiles = [];
     }
+    if (editHint) coach += editHint;
     writeRun(run);
 
     const parts = Array.isArray(event.content) ? [...event.content] : [];
@@ -1489,6 +1497,40 @@ function mergePlanTasks(
     if (!out.some((o) => o.text === t.text)) out.push(t);
   }
   return out;
+}
+
+/** v1.13.1 edit-mismatch coach: when the edit tool reports an oldText miss,
+ *  locate the intended block in the file and report the exact byte diff
+ *  (indent count, CRLF vs LF, invisible chars) so the model fixes it blind-free.
+ *  Returns an empty string unless this is an edit failure — zero overhead for
+ *  the common (successful edit) path.
+ */
+function editCoachForEvent(
+  run: RunState,
+  event: { toolName?: string; content?: unknown; input?: unknown },
+): string {
+  try {
+    if (event.toolName !== "edit") return "";
+    const parts = Array.isArray(event.content) ? event.content : [];
+    const text = parts
+      .map((p) => (p && typeof p === "object" && "text" in p ? String((p as { text?: unknown }).text ?? "") : ""))
+      .join("\n");
+    if (!EDIT_MISS_RE.test(text)) return "";
+    const input = (event.input ?? {}) as { path?: string; edits?: Array<{ oldText?: string; newText?: string }> };
+    const rel = normalizeRel(String(input.path ?? ""), run.cwd);
+    if (!rel || !Array.isArray(input.edits) || input.edits.length === 0) return "";
+    const fileText = readFileSync(join(run.cwd, rel), "utf8");
+    const bad = mismatchedEditIndices(fileText, input.edits);
+    const out: string[] = [];
+    for (const i of bad) {
+      const h = editMismatchHint(fileText, input.edits[i]?.oldText ?? "");
+      if (h) out.push(`\nHARNESS edit hint (${rel}, edit ${i}): ${h}`);
+      if (out.length >= 2) break;
+    }
+    return out.join("");
+  } catch {
+    return "";
+  }
 }
 
   pi.on("message_end", (event) => {
