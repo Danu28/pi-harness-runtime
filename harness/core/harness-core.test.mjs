@@ -29,6 +29,11 @@ import {
   classifyLane,
   gate2Required,
   parsePlan,
+  parseAcceptance,
+  stripAcceptanceBlocks,
+  extractFailures,
+  checkFailureMemory,
+  suggestBudget,
   parsePlanProgress,
   stageSkillCard,
   verifyTier,
@@ -871,4 +876,179 @@ test("parseCommitSubject: sanitizes markdown and caps at 72 chars", () => {
   assert.ok(!out.includes("*"));
   assert.ok(!out.includes("`"));
   assert.ok(!out.startsWith("- "));
+});
+
+// ---- Acceptance closure (v1.13) ----------------------------------------
+test("parseAcceptance extracts verdict and criteria", () => {
+  const text = `## Acceptance
+- [x] parseAcceptance exported
+- [ ] verdict blocks auto-commit
+
+Acceptance: partial`;
+  assert.deepEqual(parseAcceptance(text), {
+    verdict: "partial",
+    criteria: [
+      { text: "parseAcceptance exported", done: true },
+      { text: "verdict blocks auto-commit", done: false },
+    ],
+  });
+});
+
+test("parseAcceptance: verdict without criteria, case-insensitive, absent", () => {
+  assert.deepEqual(parseAcceptance("Done. ACCEPTANCE: MET"), { verdict: "met", criteria: [] });
+  assert.deepEqual(parseAcceptance("no markers here"), { verdict: null, criteria: [] });
+  assert.deepEqual(parseAcceptance(undefined), { verdict: null, criteria: [] });
+});
+
+test("parseAcceptance: the heading alone is not a verdict", () => {
+  const a = parseAcceptance("## Acceptance\n- [x] something");
+  assert.equal(a.verdict, null);
+  assert.equal(a.criteria.length, 1);
+});
+
+test("stripAcceptanceBlocks keeps criteria out of plan tasks and progress", () => {
+  const text = `## Plan
+Goal: fix auth
+- [x] task one
+
+## Acceptance
+- [ ] criterion that is NOT a task`;
+  assert.equal(parsePlan(text).tasks.length, 1);
+  assert.equal(parsePlan(text).tasks[0].text, "task one");
+  assert.equal(parsePlanProgress(text).total, 1);
+  assert.equal(parsePlanProgress(text).done, 1);
+});
+
+// ---- Structured gate output (v1.13) -------------------------------------
+test("extractFailures: node --test style", () => {
+  const out = `✔ globToRegExp crosses path segments
+✖ parseAcceptance works (12ms)
+not ok 3 - plan progress counts criteria
+ℹ tests 5`;
+  const f = extractFailures(out, "test");
+  assert.equal(f.length, 2);
+  assert.ok(f[0].includes("parseAcceptance works"));
+  assert.ok(f[1].includes("plan progress counts criteria"));
+});
+
+test("extractFailures: tsc and syntax kinds", () => {
+  assert.deepEqual(extractFailures("src/a.ts:3:5 - error TS2304: Cannot find name 'x'", "tsc"), ["src/a.ts:3:5 - error TS2304: Cannot find name 'x'"]);
+  assert.deepEqual(extractFailures("SyntaxError: Unexpected token", "syntax"), ["SyntaxError: Unexpected token"]);
+});
+
+test("extractFailures: caps at 8, dedupes, skips passing lines", () => {
+  const lines = [];
+  for (let i = 0; i < 12; i++) lines.push(`error line ${i}`);
+  const f = extractFailures(lines.join("\n") + "\nerror line 3", "custom");
+  assert.ok(f.length <= 8);
+  assert.equal(new Set(f).size, f.length);
+  assert.equal(extractFailures("0 errors\nno errors\ntests passed", "custom").length, 0);
+});
+
+// ---- Failure-memory check (v1.13) ---------------------------------------
+test("checkFailureMemory: no failures → nothing to record", () => {
+  assert.deepEqual(checkFailureMemory(CWD, new Date().toISOString(), 0), { ok: true, note: "no gate failures to record" });
+});
+
+test("checkFailureMemory: missing miss, fresh hit, stale miss", () => {
+  const dir = makeProject({});
+  try {
+    const mem = join(dir, ".harness", "longterm", "memory");
+    const p = join(mem, "failures.md");
+    const startedAt = new Date().toISOString();
+    assert.equal(checkFailureMemory(dir, startedAt, 2).ok, false); // missing
+    mkdirSync(mem, { recursive: true });
+    writeFileSync(p, "## 2024-01-01\n- lesson\n", "utf8");
+    assert.deepEqual(checkFailureMemory(dir, startedAt, 2), { ok: true, note: "failure lesson recorded this run" }); // fresh
+    const future = new Date(Date.now() + 60_000).toISOString();
+    assert.equal(checkFailureMemory(dir, future, 2).ok, false); // stale
+  } finally {
+    rmProject(dir);
+  }
+});
+
+// ---- Cross-run budget trend (v1.13) -------------------------------------
+test("suggestBudget: needs 3 finished runs", () => {
+  assert.equal(suggestBudget([], 50), null);
+  assert.equal(suggestBudget([{ status: "done", turns: 4 }, { status: "done", turns: 5 }], 50), null);
+});
+
+test("suggestBudget: raises near the ceiling, tightens well under, silent in band", () => {
+  const nearCeiling = [
+    { status: "done", turns: 48 },
+    { status: "stopped", turns: 50 },
+    { status: "done", turns: 46 },
+    { status: "done", turns: 49 },
+  ];
+  const up = suggestBudget(nearCeiling, 50);
+  assert.ok(up.suggestion > 50);
+  assert.equal(up.n, 4);
+  const slack = [
+    { status: "done", turns: 6 },
+    { status: "done", turns: 8 },
+    { status: "done", turns: 10 },
+  ];
+  const down = suggestBudget(slack, 50);
+  assert.ok(down.suggestion < 50);
+  assert.ok(down.suggestion >= 5);
+  assert.equal(suggestBudget([{ status: "done", turns: 20 }, { status: "done", turns: 30 }, { status: "done", turns: 25 }], 50), null);
+});
+
+// ---- Report rows (v1.13) ------------------------------------------------
+test("reportRows surfaces acceptance, probe, memory, trend rows", () => {
+  const base = {
+    stats: { calls: 1, tokensIn: 1, tokensCached: 0, tokensOut: 1, cost: 0, gateRuns: 1, gateFails: 1, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, turns: 2 },
+    budget: { maxTurns: 30 },
+    status: "done",
+    verifyLabel: "node --check",
+    baseline: { ok: true },
+    scope: { declared: [] },
+    autoCommit: true,
+    acceptance: { verdict: "met", criteria: [{ text: "gate green", done: true }, { text: "probe passes", done: true }] },
+    acceptResult: { ok: true },
+    acceptCmd: "npm run verify:accept",
+    memoryCheck: { ok: true, note: "failure lesson recorded this run" },
+    trend: { median: 40, n: 4, suggestion: 50, reason: "recent runs cluster near the turn ceiling" },
+  };
+  const rows = reportRows(base);
+  assert.equal(rows.find((r) => r[0] === "acceptance")[1], "met");
+  assert.equal(rows.find((r) => r[0] === "criteria")[1], "2/2");
+  assert.equal(rows.find((r) => r[0] === "accept probe")[1], "PASS");
+  assert.ok(rows.find((r) => r[0] === "accept probe")[2].includes("verify:accept"));
+  assert.equal(rows.find((r) => r[0] === "failure memory")[1], "recorded");
+  assert.equal(rows.find((r) => r[0] === "trend")[1], "median 40 turns (4 runs)");
+});
+
+test("reportRows: no acceptance info → no acceptance rows", () => {
+  const base = {
+    stats: { calls: 1, tokensIn: 1, tokensCached: 0, tokensOut: 1, cost: 0, gateRuns: 1, gateFails: 0, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, turns: 2 },
+    budget: { maxTurns: 30 },
+    status: "done",
+    verifyLabel: "node --check",
+    baseline: { ok: true },
+    scope: { declared: [] },
+    autoCommit: true,
+  };
+  const rows = reportRows(base);
+  assert.equal(rows.find((r) => r[0] === "acceptance"), undefined);
+  assert.equal(rows.find((r) => r[0] === "accept probe"), undefined);
+  assert.equal(rows.find((r) => r[0] === "failure memory"), undefined);
+  assert.equal(rows.find((r) => r[0] === "trend"), undefined);
+});
+
+test("reportRows: unmet acceptance flags the report and the skip reason", () => {
+  const base = {
+    stats: { calls: 1, tokensIn: 1, tokensCached: 0, tokensOut: 1, cost: 0, gateRuns: 1, gateFails: 0, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, turns: 2 },
+    budget: { maxTurns: 30 },
+    status: "done",
+    verifyLabel: "node --check",
+    baseline: { ok: true },
+    scope: { declared: [] },
+    autoCommit: true,
+    acceptance: { verdict: "unmet", criteria: [] },
+    autoCommitResult: { committed: false, reason: "acceptance unmet (run reports not-accepted)", leftover: [] },
+  };
+  const rows = reportRows(base);
+  assert.equal(rows.find((r) => r[0] === "acceptance")[2], "model reports acceptance NOT met");
+  assert.ok(rows.find((r) => r[0] === "auto-commit")[2].includes("acceptance unmet"));
 });

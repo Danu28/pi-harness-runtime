@@ -20,5 +20,6 @@ No plan revisions unless the code proves the plan wrong.
   fix, revert if wrong; NEVER edit the check to make it pass; stop after 3 hypotheses
   and escalate to the user. Check the boring things first (wrong file/branch, stale build).
 - Never commit unless asked.
+- End your final summary with an evidence-based `Acceptance: met|partial|unmet` line — the harness reports it and skips auto-commit on `unmet`.
 - Plan-wrong (design flaw / missing requirement) → route to planner with evidence; don't
   improvise. Task-unnecessary → reviewer, not a quiet skip.

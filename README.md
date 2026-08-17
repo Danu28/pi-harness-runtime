@@ -69,6 +69,8 @@ During a run, the harness declares an edit scope (`harness_declare`), runs the v
 | `verifyTier` | `quick` \| `standard` \| `full` — verifier depth |
 | `autoCommit` | Commit the run's changes when done |
 | `maxCost` | Optional cost ceiling ($); drives the 50% cost soft-warning (same as `--budget`) |
+| `acceptCmd` | Task-targeted acceptance probe — run once, lazily, at review entry when the model claims the task done (`Acceptance: met\|partial`) |
+| `reviewThinking` | Raise thinking for the review stage only, so the diff audit doesn't run at the editing floor |
 | `scope.strict` | Block edits outside the declared set when `true` |
 
 Two cheap correctness/cost refinements are built in:
@@ -80,6 +82,15 @@ Two cheap correctness/cost refinements are built in:
   so it can never report a stale-green review.
 - **Failure-memory nudge** — on a gate failure the harness coaches the model to classify
   it (`known`/`new`/`transient`) and persist a lesson under `.harness/longterm/memory/`.
+- **Acceptance closure** — the model states its acceptance criteria at planning
+  (`## Acceptance` + `- [x]`/`- [ ]` checkboxes) and ends the run with an evidence-based
+  `Acceptance: met|partial|unmet` line. The report shows the verdict (and criteria ticks),
+  and auto-commit is skipped when the run reports `unmet`. Failure-memory is *checked*, not
+  just nudged: a run with gate failures must have a lesson appended to
+  `.harness/longterm/memory/failures.md` this run (advisory report row). Gate output is now
+  **structured** — kind-aware failing-test/error lines are surfaced ahead of the tail, so the
+  model sees the actual failure instead of grepping truncated output. A cross-run **trend hint**
+  (median turns over recent runs) is surfaced at run start when the budget looks mis-sized.
 
 ### Ideation phase (`--phase ideate`)
 For "come up with ideas/features" requests, run `/run --phase ideate <task>` (or the

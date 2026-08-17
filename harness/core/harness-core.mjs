@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-export const CORE_VERSION = "1.12.0";
+export const CORE_VERSION = "1.13.0";
 
 export const DEFAULT_CONFIG = {
   verifyCmd: null, // override; auto-detected from package.json scripts otherwise
@@ -17,6 +17,13 @@ export const DEFAULT_CONFIG = {
   softBudgetPct: 0.65, // fraction of maxTurns where the harness asks the model for its remaining-work estimate
   maxExtensions: 2, // max auto-extensions per run — bounds a green-but-stuck loop
   autoCommit: true, // auto-commit scoped changes after a successful run
+  // Task-targeted acceptance probe (v1.13): run once at review entry when the
+  // model claims the task is done (Acceptance: met|partial). Lazy — never at
+  // start — and only when the run's acceptance verdict invites verification.
+  acceptCmd: null, // e.g. "npm run verify:accept" — the acceptance command
+  // Optional review lens (v1.13): raise thinking for the review stage only, so
+  // the diff audit doesn't run at the editing floor. null = keep current level.
+  reviewThinking: null, // e.g. "medium" — applied in harness_review
   // Name of a runtime skill-card (skillcards/<name>.md) to append to the protocol
   // as operating discipline. Set to null/false to disable. The harness protocol
   // always governs on conflict.
@@ -445,8 +452,56 @@ export function parseThinkingPrediction(text) {
  * risky = any task tagged `footprint: boundary` or a `## Risk Notes` section.
  * All fields best-effort: absent parts default to empty/false.
  */
-export function parsePlan(text) {
+// Acceptance closure (v1.13): the model states its acceptance criteria during
+// planning (`## Acceptance` + `- [x]/- [ ]` lines) and ends the run with an
+// evidence-based verdict line `Acceptance: met|partial|unmet`. The harness
+// reports it and blocks auto-commit on `unmet`. Parsed, not trusted.
+export const ACCEPT_VERDICTS = ["met", "partial", "unmet"];
+
+/**
+ * Remove `## Acceptance` sections from a message BEFORE task-list parsing, so
+ * acceptance-criteria checkboxes never leak into the plan tasklist or the
+ * plan-progress counts (which scan all `- [x]` lines globally). Stops at the
+ * next `##` heading; repeated for every block in the message.
+ */
+export function stripAcceptanceBlocks(text) {
+  let src = String(text ?? "");
+  const re = /##\s*Acceptance(?:\s+criteria)?/gi;
+  let m;
+  while ((m = re.exec(src))) {
+    const rest = src.slice(m.index + m[0].length);
+    const end = rest.search(/\n(?=##)/); // newline before the next heading
+    const blockEnd = end === -1 ? src.length : m.index + m[0].length + end;
+    src = src.slice(0, m.index) + src.slice(blockEnd);
+    re.lastIndex = 0; // restart the scan on the modified string
+  }
+  return src;
+}
+
+/**
+ * Parse the model's acceptance statement from a message. Returns
+ * { verdict, criteria } where verdict is the last `Acceptance: met|partial|
+ * |unmet` line (null when absent) and criteria are the `- [x]/- [ ]` items
+ * under a `## Acceptance` heading. Best-effort: no markers → empty defaults.
+ */
+export function parseAcceptance(text) {
   const src = String(text ?? "");
+  const criteria = [];
+  const h = src.match(/##\s*Acceptance(?:\s+criteria)?/i);
+  if (h) {
+    const rest = src.slice(h.index + h[0].length);
+    const end = rest.search(/\n##(?!#)/);
+    const block = (end === -1 ? rest : rest.slice(0, end)).trim();
+    const re = /^[ \t]*[-*]\s*\[([ xX])\]\s+(.+)$/gm;
+    let m;
+    while ((m = re.exec(block))) criteria.push({ text: m[2].trim(), done: m[1].toLowerCase() === "x" });
+  }
+  const vm = src.match(/(?:^|\s)Acceptance\s*:\s*(met|partial|unmet)\b/im);
+  return { verdict: vm ? vm[1].toLowerCase() : null, criteria };
+}
+
+export function parsePlan(text) {
+  const src = stripAcceptanceBlocks(text);
   const goal = (src.match(/^\s*Goal\s*:\s*(.+)$/im)?.[1] ?? "").trim();
   // Plan body: text between a `## Plan` / `Plan:` header and the tasks list.
   let plan = "";
@@ -566,7 +621,7 @@ export function parseCandidates(text) {
  * be on), or null when none/complete. Best-effort: no checkboxes → zeros.
  */
 export function parsePlanProgress(text) {
-  const src = String(text ?? "");
+  const src = stripAcceptanceBlocks(String(text ?? ""));
   const items = [];
   const re = /^[ \t]*[-*]\s*\[([ xX])\]\s+(.+)$/gm;
   let m;
@@ -1122,6 +1177,47 @@ export function loadSkillCard(cardDir, name) {
   }
 }
 
+// Failure-memory check (v1.13): when a run's gate failed, the harness verifies
+// a lesson actually landed in .harness/longterm/memory/failures.md this run —
+// advisory (reported, not blocked) so memory discipline is CHECKED, not just
+// nudged by prose.
+export function checkFailureMemory(cwd, startedAt, gateFails) {
+  if (!gateFails) return { ok: true, note: "no gate failures to record" };
+  const p = join(cwd, LONGTERM_DIR, "memory", "failures.md");
+  try {
+    if (!existsSync(p)) return { ok: false, note: "gate failed — no failures.md under .harness/longterm/memory/" };
+    const start = new Date(String(startedAt ?? "")).getTime() || 0;
+    return statSync(p).mtimeMs >= start
+      ? { ok: true, note: "failure lesson recorded this run" }
+      : { ok: false, note: "failures.md exists but no lesson was appended this run" };
+  } catch {
+    return { ok: false, note: "failures.md unreadable" };
+  }
+}
+
+/**
+ * Cross-run budget hint (v1.13): from the persisted run-stats trend, suggest a
+ * maxTurns when recent runs cluster near the ceiling (raise) or finish far
+ * under it (tighten). Advisory only — the caller decides whether to apply it.
+ * Returns null when there is insufficient data or the budget looks right-sized.
+ */
+export function suggestBudget(records, maxTurns = DEFAULT_CONFIG.maxTurns) {
+  const done = (Array.isArray(records) ? records : [])
+    .filter((r) => r?.status === "done" || r?.status === "stopped")
+    .map((r) => Number(r?.turns))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (done.length < 3) return null;
+  const sorted = [...done].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  if (median > maxTurns * 0.9) {
+    return { median, n: done.length, suggestion: Math.ceil(median * 1.25), reason: "recent runs cluster near the turn ceiling" };
+  }
+  if (median < maxTurns * 0.5) {
+    return { median, n: done.length, suggestion: Math.max(5, Math.ceil(median * 1.5)), reason: "recent runs finish well under budget" };
+  }
+  return null;
+}
+
 export function loadRunStats(cwd, max = 12) {
   try {
     const recs = JSON.parse(readFileSync(join(cwd, STATS_FILE), "utf8") ?? "{}")?.records;
@@ -1187,7 +1283,40 @@ export function tail(text, maxLines) {
     .join("\n");
 }
 
-export function gateResult(cmd, cwd, timeoutMs) {
+// Structured gate output (v1.13): instead of only a raw tail, the gate now
+// surfaces the specific failing lines (test names, tsc errors) so the model
+// doesn't have to grep for the real failure inside truncated output.
+const FAILURE_PATTERNS = {
+  test: [/✖/, /not ok\b/, /AssertionError/, /FAILED/, /failed:\s*\d+/],
+  tsc: [/error TS\d+/],
+  syntax: [/SyntaxError/],
+  vet: [/\berror\b/i, /\bfailed\b/i],
+  compile: [/\berror\b/i, /\bfailed\b/i],
+  script: [/\berror\b/i, /\bfailed\b/i, /✖/, /FAILED/],
+  custom: [/\berror\b/i, /\bfailed\b/i],
+};
+const FAILURE_SKIP = /^ok\b|passing|passed|0 errors?|no errors|errors?:\s*0\b|^\s*ℹ|✔/;
+
+/** Extract up to 8 distinct failure lines from gate output, kind-aware. */
+export function extractFailures(text, kind = "custom") {
+  const clean = String(text ?? "").replace(/\x1b\[[0-9;]*m/g, "").split("\n");
+  const pats = FAILURE_PATTERNS[kind] ?? FAILURE_PATTERNS.custom;
+  const seen = new Set();
+  const out = [];
+  for (const line of clean) {
+    if (out.length >= 8) break;
+    const l = line.trim();
+    if (!l || l.length > 300) continue;
+    if (FAILURE_SKIP.test(l)) continue;
+    if (pats.some((p) => p.test(l)) && !seen.has(l)) {
+      seen.add(l);
+      out.push(l.slice(0, 160));
+    }
+  }
+  return out;
+}
+
+export function gateResult(cmd, cwd, timeoutMs, kind = "custom") {
   // Strip test-runner vars so a nested `node --test` in the verify command
   // runs its own suite instead of silently exiting as a "child" process.
   const env = { ...process.env };
@@ -1206,10 +1335,13 @@ export function gateResult(cmd, cwd, timeoutMs) {
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return { ok: true, output: tail(out, 20) };
+    return { ok: true, output: tail(String(out), 20), failures: [] };
   } catch (err) {
-    const e = err?.stderr || err?.stdout || err?.message || String(err);
-    return { ok: false, output: tail(String(e), 25) };
+    const e = String(err?.stderr || err?.stdout || err?.message || "");
+    const failures = extractFailures(e, kind);
+    const t = tail(e, 25);
+    const output = failures.length ? failures.join("\n") + (t ? "\n… (tail)\n" + t : "") : t;
+    return { ok: false, output, failures };
   }
 }
 
@@ -1553,6 +1685,29 @@ export function reportRows(run) {
           : "still failing (baseline already red)";
     rows.push(["final gate", fg ? (fg.ok ? "PASS" : "FAIL") : "skipped", meaning]);
   }
+  // Acceptance closure (v1.13): the model's own acceptance statement — verdict,
+  // criteria ticks, and any configured task-targeted probe result — so "done"
+  // carries the model's evidence, not just a green gate.
+  const acc = run.acceptance;
+  if (acc?.verdict || acc?.criteria?.length) {
+    const verdict = acc?.verdict ?? "not stated";
+    const meaning =
+      verdict === "met" ? "criteria satisfied per model" :
+      verdict === "partial" ? "some criteria not met" :
+      verdict === "unmet" ? "model reports acceptance NOT met" :
+      acc?.criteria?.length ? "criteria listed, no verdict" : "not stated";
+    rows.push(["acceptance", verdict, meaning]);
+    if (acc?.criteria?.length) {
+      const done = acc.criteria.filter((c) => c.done).length;
+      rows.push(["criteria", `${done}/${acc.criteria.length}`, String(acc.criteria[0]?.text ?? "").slice(0, 40)]);
+    }
+  }
+  if (run.acceptResult) {
+    rows.push(["accept probe", run.acceptResult.ok ? "PASS" : "FAIL", run.acceptCmd ? `task-targeted: ${run.acceptCmd}` : "acceptCmd probe"]);
+  }
+  if (run.memoryCheck) {
+    rows.push(["failure memory", run.memoryCheck.ok ? "recorded" : "missing", run.memoryCheck.note]);
+  }
   rows.push(["EFFICIENCY", "", ""]);
   rows.push(
     ["gate runs / fails", `${st.gateRuns ?? 0} / ${st.gateFails ?? 0}`, "per-edit gate runs / fails"],
@@ -1562,6 +1717,9 @@ export function reportRows(run) {
     ["tokens", `${fmt(st.tokensIn)} / ${fmt(st.tokensCached)} (${hit}%) / ${fmt(st.tokensOut)}`, "in / cached% / out"],
     ["peak turn cost", `$${(st.peakTurnCost ?? 0).toFixed(4)}`, "most expensive single turn"],
   );
+  if (run.trend) {
+    rows.push(["trend", `median ${run.trend.median} turns (${run.trend.n} runs)`, `suggests maxTurns ${run.trend.suggestion} — ${run.trend.reason}`]);
+  }
   if (run.status === "stopped" && run.estRemaining != null) {
     rows.push(["est. remaining", `${run.estRemaining} turns`, "resume with /harness-resume"]);
   }

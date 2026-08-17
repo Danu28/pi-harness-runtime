@@ -70,6 +70,9 @@ import {
   parsePlanProgress,
   verifyTier,
   parseCommitSubject,
+  parseAcceptance,
+  checkFailureMemory,
+  suggestBudget,
   parseRemainingEstimate,
   renderTable,
   reportColor,
@@ -92,7 +95,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * own transforms), the mismatch catches it and /run explains instead of
  * crashing with a cryptic "X is not a function".
  */
-const EXPECTED_CORE_VERSION = "1.12.0";
+const EXPECTED_CORE_VERSION = "1.13.0";
 let staleCore = CORE_VERSION !== EXPECTED_CORE_VERSION;
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -199,6 +202,15 @@ interface RunState {
   };
   baseline: { ok: boolean; head: string } | null;
   baselineFull: { ok: boolean; head: string } | null;
+  // Acceptance closure (v1.13): the model's acceptance statement (verdict +
+  // criteria), the task-targeted probe result (acceptCmd), the failure-memory
+  // check, and the cross-run trend hint — surfaced in the report; auto-commit
+  // is blocked on an "unmet" verdict.
+  acceptance: { verdict: "met" | "partial" | "unmet" | null; criteria: { text: string; done: boolean }[] };
+  acceptCmd: string | null;
+  acceptResult: { ok: boolean; head: string } | null;
+  memoryCheck: { ok: boolean; note: string } | null;
+  trend: { median: number; n: number; suggestion: number; reason: string } | null;
   estRemaining: number | null;
   commitSubject?: string | null; // commit subject from the model's final summary (auto-commit quality)
   resumeCount: number;
@@ -398,6 +410,13 @@ function lateSync(run: RunState) {
 function maybeAutoCommit(run: RunState) {
   if (run.status !== "done") return;
   if (run.settleCap) return; // force-finalized by the settle cap — never commit incomplete work
+  if (run.acceptance?.verdict === "unmet") {
+    // Acceptance closure (v1.13): a run that reports itself not-accepted must
+    // not auto-commit — the report surfaces the skip so the user can decide.
+    run.autoCommitResult = { committed: false, reason: "acceptance unmet (run reports not-accepted)", leftover: [] };
+    console.log(`HARNESS: auto-commit skipped — ${run.autoCommitResult.reason}`);
+    return;
+  }
   if ((run.autoCommit ?? DEFAULT_CONFIG.autoCommit) === false) return;
   const healthy = run.fullCmd ? (run.stats.finalFull?.ok ?? false) : run.stats.consecutiveFails === 0;
   if (!healthy) return;
@@ -659,6 +678,11 @@ export default function harness(pi: ExtensionAPI) {
       }
       const prevThinking = pi.getThinkingLevel();
       const strict = cfg.strict !== false;
+      // Acceptance probe + cross-run trend (v1.13): the task-targeted probe is
+      // stored now and RUN LAZILY at review entry (never at start); the trend
+      // hint is advisory — surfaced via notify + the report.
+      const acceptCmd = String(cfg.acceptCmd ?? "").trim() || null;
+      const trend = suggestBudget(loadRunStats(cwd));
       settledNaturally = false; // fresh run: only a real agent_settled marks it done
       tailSyncRun = null; // a stale late-sync must never fire into this fresh run
       const nb = normalizeBudget(cfg, DEFAULT_CONFIG);
@@ -727,6 +751,11 @@ export default function harness(pi: ExtensionAPI) {
         })(),
         baseline: baseline ? { ok: baseline.ok, head: tail(baseline.output, 2) } : null,
         baselineFull: null, // filled lazily only when the final full gate FAILS (T7)
+        acceptance: { verdict: null, criteria: [] },
+        acceptCmd,
+        acceptResult: null,
+        memoryCheck: null,
+        trend,
         estRemaining: null,
         resumeCount: 0,
         prevThinking,
@@ -774,6 +803,9 @@ export default function harness(pi: ExtensionAPI) {
       }
       if (run.budgetWarnings?.length) {
         ctx.ui.notify(`Harness budget config: ${run.budgetWarnings.join(" ")}`, "warning");
+      }
+      if (trend) {
+        ctx.ui.notify(`Harness trend: median ${trend.median} turns over ${trend.n} recent runs — ${trend.reason}; consider maxTurns ${trend.suggestion}.`, "info");
       }
       ctx.ui.notify(`Harness: stage PLANNING — scoping requirements and task list.`, "info");
 
@@ -1162,12 +1194,44 @@ export default function harness(pi: ExtensionAPI) {
         verdict === "FAIL" ? "warning" : "info",
       );
       const tier = run.verifyTier ?? "standard";
+      // Review lens (v1.13): optional reviewThinking config raises thinking for
+      // the review stage only, so the diff audit doesn't run at the editing
+      // floor. The harness still restores the original level at finishRun.
+      const revCfg = loadHarnessConfig(run.cwd);
+      const revLevel = String(revCfg.reviewThinking ?? "").trim();
+      if (revLevel && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(revLevel)) {
+        try {
+          pi.setThinkingLevel(revLevel as ThinkingLevel);
+        } catch {
+          /* ignore */
+        }
+      }
+      // Acceptance probe (v1.13): when acceptCmd is configured and the model
+      // claims the task is done (met/partial), run the task-targeted probe once
+      // per review entry — lazy, like baselineFull (T7).
+      if (run.acceptCmd && (run.acceptance?.verdict === "met" || run.acceptance?.verdict === "partial")) {
+        const ap = gateResult(run.acceptCmd, run.cwd, run.timeoutMs, "custom");
+        run.acceptResult = { ok: ap.ok, head: ap.output };
+        run.stats.gateRuns++;
+        if (!ap.ok) run.stats.gateFails++;
+      }
+      // Failure-memory check (v1.13): advisory — verify a lesson landed this run
+      // when a gate failed, instead of only nudging by prose.
+      run.memoryCheck = checkFailureMemory(run.cwd, run.startedAt, run.stats.gateFails);
+      writeRun(run);
+      const accNote = run.acceptance?.verdict
+        ? ` Acceptance: ${run.acceptance.verdict}${run.acceptResult ? ` — accept probe ${run.acceptResult.ok ? "PASS" : "FAIL"}` : ""}.`
+        : "";
+      const revNote = revLevel && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(revLevel) ? ` Review thinking: ${revLevel}.` : "";
+      const memNote = run.memoryCheck && !run.memoryCheck.ok
+        ? `\nHARNESS: ${run.memoryCheck.note} — append a one-line lesson to .harness/longterm/memory/failures.md before summarizing.`
+        : "";
       // P3-T2: verifyTier is now real — standard/full runs get the verifier card
       // at review-entry (tests + review, +security/perf for full); quick-tier
       // runs skip it (the build-boundary gate + one-shot review line is their
       // check), saving ~430 tok on the common S-lane path.
       const reviewCard =
-        tier === "quick" ? "" : skillCardNote(loadHarnessConfig(run.cwd), "review");
+        (accNote + revNote + memNote) + (tier === "quick" ? "" : skillCardNote(loadHarnessConfig(run.cwd), "review"));
       return {
         content: [
           {
@@ -1175,7 +1239,7 @@ export default function harness(pi: ExtensionAPI) {
             text: `${renderPersona("review", run.persona?.domain ?? null)} Review stage entered. Full gate: ${verdict ?? "none — no verify gate configured"}. Verify tier: ${run.verifyTier} (${tierMeaning(run.verifyTier)}). Review your complete diff for correctness and acceptance. If the gate failed, fix the ONE root cause, then you may call harness_review again; otherwise write your final summary.${reviewCard}`,
           },
         ],
-        details: { fullGate: verdict },
+        details: { fullGate: verdict, acceptProbe: run.acceptResult?.ok ?? null },
       };
     },
   });
@@ -1512,6 +1576,16 @@ function mergePlanTasks(
         // Re-select the verify tier from the actual plan footprint — a boundary
         // task forces Full regardless of the initial lane heuristic.
         run.verifyTier = verifyTier({ lane: run.lane, plan: run.plan });
+        writeRun(run);
+      }
+    }
+    // Acceptance closure (v1.13): capture the model's acceptance statement —
+    // verdict (`Acceptance: met|partial|unmet`) and any `## Acceptance` criteria
+    // checkboxes — from any message; latest wins. Feeds the report + auto-commit.
+    {
+      const acc = parseAcceptance(text);
+      if (acc.verdict || acc.criteria.length) {
+        run.acceptance = acc;
         writeRun(run);
       }
     }
