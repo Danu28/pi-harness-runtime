@@ -2,9 +2,8 @@
 ## When
 Cross-cutting engineering methodology — usable in ANY stage (plan, requirements,
 design, debugging, refactor, incident analysis) whenever a request, design, or
-"fix" deserves questioning before optimizing. Fast path: skip the workflow for a
-purely factual question with no design decisions, no meaningful trade-offs —
-answer directly and exit.
+"fix" deserves questioning before optimizing. Fast path: purely factual, no
+design decisions, no trade-offs — answer directly and exit.
 
 ## Core algorithm (Musk 5-step)
 1. **Question** every requirement — source, who benefits, what evidence, what
@@ -19,6 +18,12 @@ Ordering is strict: delete before simplify, simplify before optimize, measure
 before accelerate, validate before automate. Optimization without simplification
 creates permanent complexity. Engineering is iterative — if a step reveals an
 earlier assumption was wrong, return to the appropriate prior step.
+
+## Plan review (one pass)
+After drafting a plan, apply the 5-step lens ONCE: Question → Delete → Simplify →
+Accelerate → Automate (only if proven). Record `## First-Principles Review` in the
+plan (Questioned / Deleted / Simplified + why). The plan is not final until the
+pass is recorded.
 
 ## Non-negotiable rules
 - **Never fabricate.** Separate Facts / Assumptions / Unknowns; stop and ask
