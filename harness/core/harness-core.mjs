@@ -684,8 +684,12 @@ export function parsePlanProgress(text) {
 // card follows the active stage instead of always being "builder".
 const STAGE_CARD = {
   ideation: "brainstormer",
-  // Strict first-principles BEFORE planning: the question/delete lens governs the
-  // requirements stage so redundant development is cut before the plan locks in.
+  // Strict first-principles BEFORE building: the run state machine's real
+  // pre-development stage is "planning" (its only stages are planning/
+  // development/review). Mapping it to first-principles makes the question/delete
+  // lens the active operating discipline while requirements are scoped and the
+  // plan is drafted, cutting redundant development before any build work starts.
+  planning: "first-principles",
   requirements: "first-principles",
   plan: "planner",
   "plan-review": "reviewer",

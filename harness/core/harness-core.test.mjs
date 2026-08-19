@@ -345,6 +345,9 @@ test("parsePlan extracts goal, plan body, footprint-tagged tasks, risky", () => 
 
 test("stageSkillCard maps run stages to operating-discipline cards", () => {
   assert.equal(stageSkillCard("plan"), "planner");
+  // The run machine's real pre-development stage is "planning" — first-principles
+  // must fire there so it is genuinely active before any build work.
+  assert.equal(stageSkillCard("planning"), "first-principles");
   assert.equal(stageSkillCard("requirements"), "first-principles");
   assert.equal(stageSkillCard("plan-review"), "reviewer");
   assert.equal(stageSkillCard("development"), "builder");
@@ -372,7 +375,7 @@ test("stageLayerCard layers an extra lens onto requirements only", () => {
 });
 
 test("every run stage maps to a non-null skill card (no default fallback)", () => {
-  const stages = ["ideation", "requirements", "plan", "plan-review", "development", "build", "review", "verify"];
+  const stages = ["ideation", "planning", "requirements", "plan", "plan-review", "development", "build", "review", "verify"];
   for (const s of stages) assert.ok(stageSkillCard(s), `stage "${s}" must map to a card`);
 });
 

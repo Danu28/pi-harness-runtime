@@ -557,36 +557,34 @@ function readProtocol(): string {
  * The verifier card at review-entry/resume is tier-gated (P3-T2): quick-tier
  * runs skip it; standard/full runs get it.
  */
-function skillCardNote(cfg: Record<string, unknown>, stage?: string, stats?: { skillCardTokens?: number }): string {
-  // The card follows the active stage (revised-plan A7); fall back to the
-  // configured skillCard (or the builder default) only when the stage has no
-  // mapped card. A explicit config `skillCard: <name>` always wins over the
-  // stage default.
+/** Resolve the active operating-discipline card name(s) for a stage (primary +
+ *  layered lens). Single source of truth for both prompt injection and the
+ *  user-facing notify. An explicit `skillCard` config always wins and suppresses
+ *  layering; otherwise the stage's mapped card (or the builder default) is used. */
+function activeCardNames(cfg: Record<string, unknown>, stage?: string): string[] {
   const explicit = cfg.skillCard as string | null | undefined;
   const stageCard = stage ? stageSkillCard(stage) : null;
   const name = explicit ?? stageCard ?? DEFAULT_CONFIG.skillCard;
-  if (!name) return "";
+  const names: string[] = [];
+  if (name) names.push(String(name));
+  if (!explicit && stage) {
+    const layer = stageLayerCard(stage);
+    if (layer && layer !== name) names.push(layer);
+  }
+  return names;
+}
+
+function skillCardNote(cfg: Record<string, unknown>, stage?: string, stats?: { skillCardTokens?: number }): string {
   const load = (n: string) =>
     loadSkillCard(join(HERE, "core", "skillcards"), n) ||
     loadSkillCard(join(getAgentDir(), "extensions", "core", "skillcards"), n);
   const blocks: string[] = [];
   let tokens = 0;
-  const primary = load(String(name));
-  if (primary) {
-    blocks.push(`## Operating discipline (skill card: ${name})\n${primary}`);
-    tokens += estimateTokens(primary);
-  }
-  // Layered extra lens: compose WITH the primary card, not instead of it. Only
-  // on the stage-default path — an explicit `skillCard` config is authoritative
-  // and suppresses layering. (stageLayerCard lives in harness-core.mjs.)
-  if (!explicit && stage) {
-    const layer = stageLayerCard(stage);
-    if (layer && layer !== name) {
-      const lc = load(layer);
-      if (lc) {
-        blocks.push(`## Operating discipline (skill card: ${layer})\n${lc}`);
-        tokens += estimateTokens(lc);
-      }
+  for (const n of activeCardNames(cfg, stage)) {
+    const c = load(n);
+    if (c) {
+      blocks.push(`## Operating discipline (skill card: ${n})\n${c}`);
+      tokens += estimateTokens(c);
     }
   }
   if (!blocks.length) return "";
@@ -851,7 +849,7 @@ export default function harness(pi: ExtensionAPI) {
       if (trend) {
         ctx.ui.notify(`Harness trend: median ${trend.median} turns over ${trend.n} recent runs — ${trend.reason}; consider maxTurns ${trend.suggestion}.`, "info");
       }
-      ctx.ui.notify(`Harness: stage PLANNING — scoping requirements and task list.`, "info");
+      ctx.ui.notify(`Harness: stage PLANNING — scoping requirements and task list. Operating discipline: ${activeCardNames(cfg, "planning").join(" + ") || "(none)"}.`, "info");
 
       // Kick off the agent and wait for it to actually settle. In RPC mode
       // (and some interactive paths) the agent starts asynchronously, so
@@ -978,7 +976,8 @@ export default function harness(pi: ExtensionAPI) {
       // P3-T2: quick-tier runs skip the verifier card even on mid-review resume
       // (consistent with the one-shot review-entry wiring above).
       if (run.stage === "review" && (run.verifyTier ?? "standard") === "quick") card = "";
-      ctx.ui.notify(`Harness: resumed +${sized} turns (budget ${run.budget.maxTurns}) — ${run.verifyLabel} | stage ${run.stage ?? "planning"}`, "info");
+      const discipline = activeCardNames(cfg, run.phase === "ideate" && run.stage === "planning" ? "ideation" : run.stage).join(" + ");
+      ctx.ui.notify(`Harness: resumed +${sized} turns (budget ${run.budget.maxTurns}) — ${run.verifyLabel} | stage ${run.stage ?? "planning"} | discipline ${discipline || "(default)"}`, "info");
       try {
         pi.sendUserMessage(prompt + card);
       } catch (err) {
