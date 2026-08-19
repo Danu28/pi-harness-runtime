@@ -92,6 +92,9 @@ import {
   cachedGreen,
   recordGreen,
   invalidateGreen,
+  lastGreen,
+  recordGateFail,
+  loadGateRollbacks,
   failureTriage,
   recordGateFailure,
   loadGateFailures,
@@ -1120,6 +1123,26 @@ export default function harness(pi: ExtensionAPI) {
     },
   });
 
+  // ---- harness-fork-green (gap #3): last-green rollback point ------------
+  pi.registerCommand("harness-fork-green", {
+    description: "Show the last-green rollback point (gap #3): newest cached green gate + latest recorded red gate",
+    handler: async (_args, ctx) => {
+      const lg = lastGreen(ctx.cwd);
+      const rb = loadGateRollbacks(ctx.cwd, 1)[0];
+      console.log(`\n=== HARNESS LAST-GREEN (gap #3) ===`);
+      if (!lg) {
+        console.log("no last-green rollback point on record — run a green gate first.");
+      } else {
+        console.log(`head:     ${lg.head}`);
+        console.log(`verify:   ${lg.verifyCmd}`);
+        console.log(`recorded: ${new Date(lg.ts).toISOString()}`);
+        console.log(`rollback: git reset --hard ${lg.head}`);
+      }
+      if (rb) console.log(`latest red: ${rb.head.slice(0, 7) || "(none)"} — ${rb.reason} (${new Date(rb.ts).toISOString()})`);
+      console.log("=== END HARNESS LAST-GREEN ===");
+    },
+  });
+
   // ---- harness_declare tool ----------------------------------------------
   pi.registerTool({
     name: "harness_declare",
@@ -1521,6 +1544,13 @@ export default function harness(pi: ExtensionAPI) {
       run.stats.gateFails++;
       run.stats.consecutiveFails++;
       run.stats.consecutivePasses = 0;
+      // T3 (gap #3): record the red gate and surface the last-green rollback
+      // point so a failed run never loses the known-good state (opt-in).
+      if (cfg.autoFork) {
+        recordGateFail(run.cwd, { head: gitState?.head ?? "", verifyCmd: gateCmd, reason: `edit-gate failed (gateFails=${run.stats.gateFails})` });
+        const lg = lastGreen(run.cwd);
+        if (lg) coach += `\nHARNESS: last green at ${lg.head.slice(0, 7)} (${lg.verifyCmd}) — rollback: git reset --hard ${lg.head}`;
+      }
       // T6: persist the red output and auto-triage against prior failures so the
       // model gets a pre-filled known/new classification instead of re-debugging.
       recordGateFailure(run.cwd, { output: r.output });

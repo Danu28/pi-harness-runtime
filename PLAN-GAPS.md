@@ -20,7 +20,7 @@ remain** (#3, #4, #7). Do not re-implement the 8 closed gaps.
 | 9 | Warn→confirm tiers for dangerous actions | ✅ **done** | `dangerTier()` + `dangerTiers` config (`harness-core.mjs` ~164) |
 | 10 | Monorepo per-package gates | ✅ **done** | `perPackageGate` config + nearest-manifest resolution (`harness-core.mjs` ~1031, `index.ts`) |
 | 11 | Prompt-cache reporting | ✅ **done** (reporting half) | `message_end` `usage.cacheRead` → `tokensCached` + `cacheHitPct` report row (`reportRows`); byte-stable prefix *persistence* left as follow-up |
-| **3** | **Auto-fork on gate failure** | ⬜ **open** | not in source |
+| 3 | Auto-fork on gate failure | ✅ **done** | `lastGreen`/`recordGateFail`/`loadGateRollbacks` + `autoFork` config (`harness-core.mjs`), edit-gate rollback coach + `/harness-fork-green` (`index.ts`) |
 | **4** | **Parallel sub-runs** | ⬜ **open** | not in source |
 | **7** | **Unify tool-output budget with context-mode KB** | ⬜ **open** | not in source |
 
@@ -117,7 +117,7 @@ risk, small.
 - [x] T9 · Warn→confirm tiers (#9) — done `3a43970`
 - [x] T10 · Monorepo per-package gates (#10) — done `3a43970`
 - [x] T11 · Prompt-cache reporting (#11) — done `3a43970` (persistence = follow-up)
-- [ ] T3 · Auto-fork / last-green rollback point (#3) — **implement next** — low risk
+- [x] T3 · Auto-fork / last-green rollback point (#3) — done (lastGreen/recordGateFail + coach + `/harness-fork-green`)
 - [ ] T4 · Parallel sub-runs (#4) — `footprint: boundary`, optional, gated
 - [ ] T7 · Unify with context-mode KB (#7) — `footprint: boundary`, optional, gated
 - [ ] T11b · Prompt-cache byte-stable prefix persistence — follow-up, low risk

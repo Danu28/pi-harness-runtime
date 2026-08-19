@@ -68,6 +68,9 @@ import {
   cachedGreen,
   recordGreen,
   invalidateGreen,
+  lastGreen,
+  recordGateFail,
+  loadGateRollbacks,
   loadGateFailures,
   recordGateFailure,
   failureTriage,
@@ -1274,6 +1277,48 @@ test("loadGateCache tolerates a missing/corrupt file", () => {
     mkdirSync(join(dir, ".harness/longterm"), { recursive: true });
     writeFileSync(join(dir, ".harness/longterm/gate-cache.json"), "not json", "utf8");
     assert.deepEqual(loadGateCache(dir), { entries: [] });
+  } finally {
+    rmProject(dir);
+  }
+});
+
+// ---- Last-green rollback point (gap #3) ----------------------------------
+test("lastGreen returns the newest cached green entry, or null when empty", () => {
+  const dir = makeProject({});
+  try {
+    assert.equal(lastGreen(dir), null, "empty cache → no rollback point");
+    recordGreen(dir, { verifyCmd: "npm test", head: "aaa", porcelain: [] });
+    recordGreen(dir, { verifyCmd: "npm test", head: "bbb", porcelain: [] });
+    const lg = lastGreen(dir);
+    assert.equal(lg.head, "bbb", "newest green wins");
+    assert.equal(lg.verifyCmd, "npm test");
+    assert.ok(typeof lg.ts === "number");
+  } finally {
+    rmProject(dir);
+  }
+});
+
+test("recordGateFail persists rollback records, newest-first, capped at 50", () => {
+  const dir = makeProject({});
+  try {
+    for (let i = 0; i < 60; i++) recordGateFail(dir, { head: `h${i}`, verifyCmd: "npm test", reason: `fail ${i}` });
+    const recs = loadGateRollbacks(dir, 100);
+    assert.equal(recs.length, 50, "capped at 50");
+    assert.equal(recs[0].head, "h59", "newest first");
+    assert.ok(String(recs[0].reason).includes("fail 59"));
+    assert.equal(recs[0].verifyCmd, "npm test");
+  } finally {
+    rmProject(dir);
+  }
+});
+
+test("a red-gate rollback record does not disturb the last-green rollback point", () => {
+  const dir = makeProject({});
+  try {
+    recordGreen(dir, { verifyCmd: "npm test", head: "aaa", porcelain: [] });
+    recordGateFail(dir, { head: "bbb", verifyCmd: "npm test", reason: "red" });
+    assert.equal(lastGreen(dir).head, "aaa", "rollback point unchanged by a red record");
+    assert.equal(cachedGreen(dir, { verifyCmd: "npm test", head: "bbb", porcelain: [] }), null, "red is not a green");
   } finally {
     rmProject(dir);
   }

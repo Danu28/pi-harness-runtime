@@ -51,6 +51,10 @@ export const DEFAULT_CONFIG = {
   // Monorepo per-package gates (gap #10): when all changed files resolve to one
   // nested package, gate that package's verify instead of the root suite.
   perPackageGate: false,
+  // Last-green rollback point (gap #3): on a red gate, record the failing head
+  // and coach the newest cached green as a rollback point (`/harness-fork-green`
+  // shows it). Off by default — today's behavior stays when unset/false.
+  autoFork: false,
   thinkingStart: "low",
   thinkingEscalated: "high",
   strict: true,
@@ -1319,6 +1323,51 @@ export function invalidateGreen(cwd, { verifyCmd, head, porcelain }) {
   const next = entries.filter((e) => e.key !== key);
   if (next.length !== entries.length) saveGateCache(cwd, next);
   return next.length;
+}
+
+// ---- Last-green rollback point (gap #3) ----------------------------------
+// After a gate failure the model can lose the last known-good state. The newest
+// GREEN entry in the persisted gate cache IS the rollback point (reused state,
+// no second store). A small separate log records each red gate (head + reason)
+// so /harness-fork-green can show when/why the rollback point matters.
+
+/** Newest cached GREEN gate entry → the rollback point, or null. */
+export function lastGreen(cwd) {
+  const { entries } = loadGateCache(cwd);
+  const hit = entries.find((e) => e.ok === true && e.head);
+  return hit ? { head: hit.head, verifyCmd: hit.verifyCmd, ts: hit.ts } : null;
+}
+
+const GATE_ROLLBACK_FILE = join(LONGTERM_DIR, "gate-rollback.json");
+const GATE_ROLLBACK_CAP = 50;
+
+/** Load persisted red-gate rollback records (newest-first, capped). Never throws. */
+export function loadGateRollbacks(cwd, max = 20) {
+  try {
+    const recs = JSON.parse(readFileSync(join(cwd, GATE_ROLLBACK_FILE), "utf8") ?? "{}")?.records;
+    if (!Array.isArray(recs)) return [];
+    return recs.slice(0, max);
+  } catch {
+    return [];
+  }
+}
+
+/** Best-effort persist of a red-gate rollback record (head + reason, cap 50). */
+export function recordGateFail(cwd, { head, verifyCmd, reason }) {
+  try {
+    const rec = {
+      head: String(head ?? ""),
+      verifyCmd: String(verifyCmd ?? ""),
+      reason: String(reason ?? "").slice(0, 300),
+      ts: Date.now(),
+    };
+    const recs = [rec, ...loadGateRollbacks(cwd, GATE_ROLLBACK_CAP)];
+    mkdirSync(join(cwd, LONGTERM_DIR), { recursive: true });
+    writeFileSync(join(cwd, GATE_ROLLBACK_FILE), JSON.stringify({ records: recs.slice(0, GATE_ROLLBACK_CAP) }, null, 2), "utf8");
+    return recs.length;
+  } catch {
+    return 0;
+  }
 }
 
 // ---- Auto-triage of gate failures (gap #6) ------------------------------
