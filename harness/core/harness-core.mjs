@@ -684,7 +684,9 @@ export function parsePlanProgress(text) {
 // card follows the active stage instead of always being "builder".
 const STAGE_CARD = {
   ideation: "brainstormer",
-  requirements: "reviewer",
+  // Strict first-principles BEFORE planning: the question/delete lens governs the
+  // requirements stage so redundant development is cut before the plan locks in.
+  requirements: "first-principles",
   plan: "planner",
   "plan-review": "reviewer",
   development: "builder",
@@ -699,12 +701,13 @@ export function stageSkillCard(stage) {
 }
 
 // Layered operating-discipline lenses (composed WITH the primary stage card, not
-// replacing it). first-principles is the question/delete lens applied before
-// planning locks in — it complements the reviewer's plan-contract gate at the
-// requirements stage. Only the stage-default path layers; an explicit
-// `skillCard` config stays authoritative.
+// replacing it). With first-principles now the primary requirements card, the
+// reviewer's plan-contract gate rides alongside it as the backup layer, so the
+// questioning/delete lens leads while the acceptance structure is retained.
+// Only the stage-default path layers; an explicit `skillCard` config stays
+// authoritative.
 const STAGE_LAYER_CARD = {
-  requirements: "first-principles",
+  requirements: "reviewer",
 };
 
 /** Extra skill-card lens layered onto a stage's primary card, or null. */

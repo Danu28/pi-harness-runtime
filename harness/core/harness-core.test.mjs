@@ -345,7 +345,7 @@ test("parsePlan extracts goal, plan body, footprint-tagged tasks, risky", () => 
 
 test("stageSkillCard maps run stages to operating-discipline cards", () => {
   assert.equal(stageSkillCard("plan"), "planner");
-  assert.equal(stageSkillCard("requirements"), "reviewer");
+  assert.equal(stageSkillCard("requirements"), "first-principles");
   assert.equal(stageSkillCard("plan-review"), "reviewer");
   assert.equal(stageSkillCard("development"), "builder");
   assert.equal(stageSkillCard("build"), "builder");
@@ -359,7 +359,7 @@ test("stageSkillCard maps run stages to operating-discipline cards", () => {
 // Idea #1 (phase-scoped cards) residual gap: every stage the dev loop actually
 // runs must map to a card, so none silently falls back to the builder default.
 test("stageLayerCard layers an extra lens onto requirements only", () => {
-  assert.equal(stageLayerCard("requirements"), "first-principles");
+  assert.equal(stageLayerCard("requirements"), "reviewer");
   assert.equal(stageLayerCard("ideation"), null);
   assert.equal(stageLayerCard("plan"), null);
   assert.equal(stageLayerCard("plan-review"), null);
