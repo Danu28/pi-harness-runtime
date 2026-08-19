@@ -86,6 +86,18 @@ import {
   shouldEscalate,
   shouldStop,
   tail,
+  gitHead,
+  changedPaths,
+  cachedGreen,
+  recordGreen,
+  invalidateGreen,
+  failureTriage,
+  recordGateFailure,
+  loadGateFailures,
+  testSelector,
+  dangerTier,
+  editRequiresGate,
+  nearestPackageDir,
 } from "./core/harness-core.mjs";
 
 // Self-contained anchor: this extension's own directory, wherever pi loaded it
@@ -203,6 +215,7 @@ interface RunState {
     pendingNewFiles?: string[];
     skillCardTokens?: number; // idea #1: operating-discipline card tokens injected this run
     peakTurnCost: number;
+    gateCacheHits?: number; // gap #2: cross-run green gates reused from cache
     finalGate?: { ok: boolean };
     finalFull?: { ok: boolean };
   };
@@ -750,7 +763,7 @@ export default function harness(pi: ExtensionAPI) {
         // gitNewFiles diff reports only files NEW since the run started, not
         // every already-changed/uncommitted file in the working tree.
         stats: (() => {
-          const st = { calls: 0, tokensIn: 0, tokensCached: 0, tokensOut: 0, gateRuns: 0, gateFails: 0, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, warned50: false, gateDirty: false, warnedCost50: false, knownFiles: [], peakTurnCost: 0, turns: 0, cost: 0 };
+          const st = { calls: 0, tokensIn: 0, tokensCached: 0, tokensOut: 0, gateRuns: 0, gateFails: 0, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, warned50: false, gateDirty: false, warnedCost50: false, knownFiles: [], peakTurnCost: 0, gateCacheHits: 0, turns: 0, cost: 0 };
           try {
             st.knownFiles = gitNewFiles(cwd, new Set()).set;
           } catch {
@@ -1308,9 +1321,14 @@ export default function harness(pi: ExtensionAPI) {
 
     if (isToolCallEventType("bash", event)) {
       const cmd = String(event.input?.command ?? "");
-      const hit = dangerousBash(cmd);
-      if (hit) {
-        return { block: true, reason: `HARNESS: blocked dangerous command (matches "${hit}")` };
+      const cfg = activeRun ? loadHarnessConfig(activeRun.cwd) : {};
+      const dt = dangerTier(cmd, cfg.dangerTiers);
+      if (dt.tier === "allow") return; // explicitly allowed via dangerTiers
+      if (dt.pattern) {
+        return {
+          block: true,
+          reason: `HARNESS: blocked dangerous command (matches "${dt.pattern}")${dt.tier === "confirm" ? " — confirm tier is not interactive in this harness; treating as block. Allow it via harness.json dangerTiers." : ""}`,
+        };
       }
       return;
     }
@@ -1403,10 +1421,61 @@ export default function harness(pi: ExtensionAPI) {
     }
     if (!run.verifyCmd) return truncated ? { content: parts } : undefined; // degraded mode — no gate
 
-    const r = gateResult(run.verifyCmd, run.verifyCwd ?? run.cwd, run.timeoutMs);
-    run.stats.gateRuns++;
+    const cfg = loadHarnessConfig(run.cwd);
+    const changed = changedPaths(run.cwd);
+    const isEdit = event.toolName === "edit" || event.toolName === "write";
+
+    // T8 (skip-gate): a pure-doc/whitespace edit needs no per-edit gate; the
+    // review/full gate always runs the suite regardless.
+    if (isEdit && cfg.skipDocGate !== false && !editRequiresGate(changed)) {
+      return truncated ? { content: parts } : undefined;
+    }
+
+    // T10 (monorepo): when all changed files resolve to one nested package and
+    // perPackageGate is on, gate that package's suite instead of the root.
+    let gateCmd = run.verifyCmd;
+    let gateCwd = run.verifyCwd ?? run.cwd;
+    if (cfg.perPackageGate) {
+      const pkg = nearestPackageDir(changed, run.cwd);
+      if (pkg) {
+        const pv = detectVerify(pkg);
+        if (pv?.command) {
+          gateCmd = pv.command;
+          gateCwd = pkg;
+        }
+      }
+    }
+
+    // T2 (selective tests): narrow the edit-gate to affected tests for recognized
+    // runners; the review/full gate is never narrowed.
+    if (cfg.selectiveTests && run.stage === "development") {
+      const sel = testSelector(gateCmd, changed);
+      if (sel.type === "selective") gateCmd = sel.cmd;
+    }
+
+    // T1 (cross-run gate cache): reuse a last-green verdict on the identical git
+    // state so repeat/resume/clean-tree gates pay ~$0; never stale-green.
+    let r;
+    let cached = false;
+    let gitState = null;
+    if (cfg.cacheGreenGates !== false) {
+      gitState = { verifyCmd: gateCmd, head: gitHead(gateCwd), porcelain: changedPaths(gateCwd) };
+      const hit = cachedGreen(run.cwd, gitState);
+      if (hit) {
+        r = { ok: true, output: "cached green (tree unchanged since a prior green gate)", failures: [] };
+        cached = true;
+        run.stats.gateCacheHits = (run.stats.gateCacheHits ?? 0) + 1;
+      } else {
+        r = gateResult(gateCmd, gateCwd, run.timeoutMs);
+        if (r.ok) recordGreen(run.cwd, gitState);
+        else invalidateGreen(run.cwd, gitState);
+      }
+    } else {
+      r = gateResult(gateCmd, gateCwd, run.timeoutMs);
+    }
+    if (!cached) run.stats.gateRuns++;
     run.stats.gateDirty = false; // the gate just re-verified the current tree
-    let coach = "";
+    let coach = cached ? "\nHARNESS: gate result reused from cache (tree unchanged since last green)." : "";
     if (r.ok) {
       run.stats.consecutiveFails = 0;
       // Reward a green streak: if thinking was escalated, drop it back down
@@ -1431,6 +1500,10 @@ export default function harness(pi: ExtensionAPI) {
       run.stats.gateFails++;
       run.stats.consecutiveFails++;
       run.stats.consecutivePasses = 0;
+      // T6: persist the red output and auto-triage against prior failures so the
+      // model gets a pre-filled known/new classification instead of re-debugging.
+      recordGateFailure(run.cwd, { output: r.output });
+      const triage = failureTriage(r.output, loadGateFailures(run.cwd, 20));
       if (shouldEscalate(run.stats.consecutiveFails, run.budget.maxConsecutiveFails, run.ladder.escalated)) {
         // Thinking-level ONLY — the harness never changes the model (e.g. flash→pro).
         // Enforced by the unit test that greps harness.ts for setModel. No setModel here.
@@ -1443,7 +1516,7 @@ export default function harness(pi: ExtensionAPI) {
       // Failure-memory nudge: ride the existing gate-fail coach rail so the model
       // classifies the failure and persists a lesson instead of re-learning it next
       // session (discipline in code, not prose). Memory lives under .harness per protocol.
-      coach += `\nHARNESS: gate failed — classify this failure (known|new|transient). If new, append a one-line cause + prevention to .harness/longterm/memory/failures.md via your tools; if known, apply its Prevention Rule.`;
+      coach += `\nHARNESS: gate failed — auto-triage: ${triage.kind === "known" ? "KNOWN (matches a prior failure) — apply its known fix" : "NEW"}. ${triage.kind === "known" ? "" : "Classify (known|new|transient); if new, append a one-line cause + prevention to .harness/longterm/memory/failures.md via your tools; if known, apply its Prevention Rule."}`;
     }
     // Mid-run budget progress feedback so the model can wrap up before the wall.
     const pct = run.stats.turns / Math.max(1, run.budget.maxTurns);

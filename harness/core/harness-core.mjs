@@ -1,5 +1,6 @@
 // harness-core.mjs — pure, dependency-free logic for the pi harness extension.
 // No pi imports; unit-testable with plain `node --test`. harness.ts wires this to pi.
+import { createHash } from "node:crypto";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -34,6 +35,22 @@ export const DEFAULT_CONFIG = {
   // tail-truncates at 2000 lines/50KB (~12.5K tokens) — this tightens the
   // re-injected result to a token budget. null/0 disables.
   toolOutputTokens: 3000,
+  // Cross-run gate cache (gap #2): reuse a last-green gate verdict when the git
+  // state (HEAD + working-tree porcelain set) exactly matches a prior green run.
+  cacheGreenGates: true,
+  // Selective tests (gap #1): narrow the edit-gate to tests affected by the
+  // changed files when the verify command is a recognized runner. Full suite
+  // always runs at review. Opt-in — false keeps today's behavior.
+  selectiveTests: false,
+  // Skip-gate on pure-doc/whitespace edits (gap #8): only changed doc files
+  // (.md/.txt/images) → the edit-gate is skipped; review still runs full.
+  skipDocGate: true,
+  // Warn→confirm tiers (gap #9): harness.json → dangerTiers: {"<pattern>":
+  // "block"|"confirm"|"allow"}. Default block keeps today's behavior.
+  dangerTiers: {},
+  // Monorepo per-package gates (gap #10): when all changed files resolve to one
+  // nested package, gate that package's verify instead of the root suite.
+  perPackageGate: false,
   thinkingStart: "low",
   thinkingEscalated: "high",
   strict: true,
@@ -137,6 +154,20 @@ export function dangerousBash(cmd) {
   return null;
 }
 
+/**
+ * Warn→confirm tiers (gap #9): map a dangerous command's matched pattern to a
+ * configured tier. `dangerTiers` (harness.json) is `{ "<pattern>": "block" |
+ * "confirm" | "allow" }` where pattern is exactly what `dangerousBash()` returns
+ * (e.g. "rm -rf /|~|$HOME"). Default fallback is "block" — today's hard-block.
+ * Returns { tier: null } when the command is safe, else { tier, pattern }.
+ */
+export function dangerTier(cmd, tiers = {}, fallback = "block") {
+  const hit = dangerousBash(cmd);
+  if (!hit) return { tier: null };
+  const t = String(tiers?.[hit] ?? fallback);
+  return { tier: t === "allow" || t === "confirm" ? t : "block", pattern: hit };
+}
+
 const READONLY_CMDS = new Set([
   "ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "echo", "pwd",
   "which", "type", "tree", "printf", "less", "more", "sed", "awk", "sort", "uniq", "cut",
@@ -181,6 +212,18 @@ export function bashMutates(cmd) {
   if (READONLY_TOOL_FLAGS[head]?.some((f) => peeled.includes(f))) return false;
   if (MUTATING_CMDS.has(head)) return true;
   return toks.some((t) => MUTATING_SUFFIX.some((s) => t.endsWith(s)));
+}
+
+// Skip-gate classifier (gap #8): a change is "doc-only" when every changed file
+// is a documentation/text/image surface (or the diff is empty). Pure-doc edits
+// skip the per-edit gate (the review/full gate still runs). Markdown, plain
+// text, RST/AsciiDoc, and image assets are safe; config/data files that affect
+// the build (package.json, tsconfig, .json, .yaml) are NOT exempt.
+const DOC_SURFACE_RE = /\.(md|mdx|txt|rst|adoc|svg|png|jpe?g|gif|webp|ico)$/i;
+export function editRequiresGate(changedFiles) {
+  const changed = (Array.isArray(changedFiles) ? changedFiles : []).map(String).filter(Boolean);
+  if (!changed.length) return false;
+  return changed.some((f) => !DOC_SURFACE_RE.test(f));
 }
 
 export function normalizeRel(p, cwd) {
@@ -963,6 +1006,38 @@ export function detectVerify(cwd, opts = {}) {
   return null;
 }
 
+/**
+ * Monorepo per-package gate (gap #10): from each changed file, walk up to the
+ * nearest package manifest (package.json / go.mod / Cargo.toml). If ALL changed
+ * files resolve to the SAME nested package dir, return that dir so the harness
+ * can gate that package's suite instead of the root. Returns null when the
+ * files resolve to the root itself or to more than one package (cross-package
+ * change → root gate). Pure + path-only (no manifest parsing), so it's safe and
+ * unit-testable without any build tooling.
+ */
+export function nearestPackageDir(changedFiles, cwd = process.cwd()) {
+  const changed = (Array.isArray(changedFiles) ? changedFiles : []).map(String).filter(Boolean);
+  if (!changed.length) return null;
+  const root = resolve(cwd);
+  const pkgs = new Set();
+  for (const f of changed) {
+    let dir = dirname(resolve(root, f));
+    let found = null;
+    let hops = 0;
+    while (dir && dir !== root && dir !== dirname(dir) && hops < 8) {
+      if (existsSync(join(dir, "package.json")) || existsSync(join(dir, "go.mod")) || existsSync(join(dir, "Cargo.toml"))) {
+        found = dir;
+        break;
+      }
+      dir = dirname(dir);
+      hops++;
+    }
+    pkgs.add(found ?? root);
+  }
+  const single = pkgs.size === 1 ? [...pkgs][0] : null;
+  return single && single !== root ? single : null;
+}
+
 export function shouldEscalate(consecutiveFails, max, alreadyEscalated) {
   return !alreadyEscalated && consecutiveFails >= max;
 }
@@ -1142,6 +1217,143 @@ export function clearTempDir(cwd) {
  */
 export function isHarnessPath(rel) {
   return rel === ".harness" || rel.startsWith(".harness/");
+}
+
+// ---- Cross-run gate cache (gap #2) --------------------------------------
+// Reuse a last-green gate verdict when the git state (HEAD + working-tree
+// porcelain set) EXACTLY matches a prior green run. Same commit + same mods ⇒
+// the same test result (tests are assumed deterministic, as everywhere else in
+// the harness). Only fires when it is provably safe — a dirty mid-run tree
+// almost never matches a cached green. Cache lives under .harness/longterm/,
+// capped at 20, and never stores a red (a red run invalidates its key).
+const GATE_CACHE_FILE = join(LONGTERM_DIR, "gate-cache.json");
+const GATE_CACHE_CAP = 20;
+
+/** Current HEAD sha ("" when not a git repo or rev-parse fails). */
+export function gitHead(cwd) {
+  try {
+    return execSync("git rev-parse HEAD", { cwd, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/** Sorted list of changed rel paths from the porcelain set. */
+export function changedPaths(cwd) {
+  const set = setFromPorcelain(gitPorcelain(cwd));
+  return [...set].sort();
+}
+
+/** Load the persisted gate cache (newest-first, capped). Never throws. */
+export function loadGateCache(cwd) {
+  try {
+    const recs = JSON.parse(readFileSync(join(cwd, GATE_CACHE_FILE), "utf8") ?? "{}")?.entries;
+    if (!Array.isArray(recs)) return { entries: [] };
+    return { entries: recs.slice(0, GATE_CACHE_CAP) };
+  } catch {
+    return { entries: [] };
+  }
+}
+
+/** Best-effort persist of the gate cache. */
+export function saveGateCache(cwd, entries) {
+  try {
+    mkdirSync(join(cwd, LONGTERM_DIR), { recursive: true });
+    writeFileSync(join(cwd, GATE_CACHE_FILE), JSON.stringify({ entries: entries.slice(0, GATE_CACHE_CAP) }, null, 2), "utf8");
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Stable cache key: verifyCmd + HEAD + sorted porcelain set. */
+export function gateCacheKey({ verifyCmd, head, porcelain }) {
+  const src = `${String(verifyCmd ?? "")}\u0000${String(head ?? "")}\u0000${(Array.isArray(porcelain) ? porcelain : []).join("\u0001")}`;
+  return createHash("sha1").update(src).digest("hex");
+}
+
+/** A cached GREEN entry for the exact git state, or null (never stale-green). */
+export function cachedGreen(cwd, { verifyCmd, head, porcelain }) {
+  const key = gateCacheKey({ verifyCmd, head, porcelain });
+  const { entries } = loadGateCache(cwd);
+  const hit = entries.find((e) => e.key === key && e.ok === true);
+  return hit ? { ok: true, cached: true, ts: hit.ts } : null;
+}
+
+/** Record a genuinely green gate result for the current git state. */
+export function recordGreen(cwd, { verifyCmd, head, porcelain }) {
+  const { entries } = loadGateCache(cwd);
+  const key = gateCacheKey({ verifyCmd, head, porcelain });
+  const next = [
+    { key, verifyCmd: String(verifyCmd ?? ""), head: String(head ?? ""), porcelain: Array.isArray(porcelain) ? porcelain : [], ok: true, ts: Date.now() },
+    ...entries.filter((e) => e.key !== key),
+  ];
+  saveGateCache(cwd, next);
+  return next.length;
+}
+
+/** Drop any cached entry whose key matches (called on a red gate). */
+export function invalidateGreen(cwd, { verifyCmd, head, porcelain }) {
+  const key = gateCacheKey({ verifyCmd, head, porcelain });
+  const { entries } = loadGateCache(cwd);
+  const next = entries.filter((e) => e.key !== key);
+  if (next.length !== entries.length) saveGateCache(cwd, next);
+  return next.length;
+}
+
+// ---- Auto-triage of gate failures (gap #6) ------------------------------
+// Persist recent red-gate outputs (signature store) and classify a new failure
+// as KNOWN (matches a prior failure) or NEW, so the model gets a pre-filled
+// classification and can apply the remembered fix instead of re-debugging.
+const GATE_FAILURES_FILE = join(LONGTERM_DIR, "gate-failures.json");
+const GATE_FAILURES_CAP = 50;
+
+/** Load recent red-gate outputs (newest-first, capped). Never throws. */
+export function loadGateFailures(cwd, max = 20) {
+  try {
+    const recs = JSON.parse(readFileSync(join(cwd, GATE_FAILURES_FILE), "utf8") ?? "{}")?.records;
+    if (!Array.isArray(recs)) return [];
+    return recs.slice(0, max);
+  } catch {
+    return [];
+  }
+}
+
+/** Best-effort persist of a red-gate output (dedup by output hash, cap 50). */
+export function recordGateFailure(cwd, { output }) {
+  try {
+    const o = String(output ?? "");
+    if (!o.trim()) return 0;
+    const hash = createHash("sha1").update(o).digest("hex");
+    let recs = loadGateFailures(cwd, GATE_FAILURES_CAP);
+    recs = [{ hash, output: o.slice(0, 1500), ts: Date.now() }, ...recs.filter((r) => r.hash !== hash)];
+    mkdirSync(join(cwd, LONGTERM_DIR), { recursive: true });
+    writeFileSync(join(cwd, GATE_FAILURES_FILE), JSON.stringify({ records: recs.slice(0, GATE_FAILURES_CAP) }, null, 2), "utf8");
+    return recs.length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Classify a gate failure against prior red-gate outputs. Token-cosine match;
+ * score > 0.5 → KNOWN with a matching prior excerpt, else NEW. Pure + testable.
+ */
+export function failureTriage(output, recents = []) {
+  const o = String(output ?? "");
+  if (!o.trim()) return { kind: "new" };
+  const toks = (s) => new Set(String(s).toLowerCase().split(/[^a-z0-9_.:/-]+/).filter((t) => t.length >= 4));
+  const ot = toks(o);
+  if (!ot.size) return { kind: "new" };
+  let best = null;
+  for (const r of Array.isArray(recents) ? recents : []) {
+    const rt = toks(r?.output ?? "");
+    if (!rt.size) continue;
+    let shared = 0;
+    for (const t of ot) if (rt.has(t)) shared++;
+    const score = shared / Math.sqrt(ot.size * rt.size);
+    if (score > 0.5 && (!best || score > best.score)) best = { score, output: String(r?.output ?? "").slice(0, 200) };
+  }
+  return best ? { kind: "known", match: best.output, score: best.score } : { kind: "new" };
 }
 
 /**
@@ -1357,6 +1569,32 @@ const FAILURE_PATTERNS = {
 const FAILURE_SKIP = /^ok\b|passing|passed|0 errors?|no errors|errors?:\s*0\b|^\s*ℹ|✔/;
 
 /** Extract up to 8 distinct failure lines from gate output, kind-aware. */
+// Structured test-runner output (gap #5): extract per-test failure rows from
+// TAP ("not ok N - name") and JUnit XML (<testcase><failure>) so the model sees
+// WHICH test broke (and where), not just a pass/fail blob. Pure + testable.
+export function parseTestFailures(text) {
+  const clean = String(text ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+  const rows = [];
+  const seen = new Set();
+  // TAP: `not ok N - name`
+  for (const m of clean.matchAll(/^not ok\s+\d+\s*-\s*(.+)$/gm)) {
+    const name = m[1].trim().slice(0, 140);
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      rows.push(`test: ${name} (TAP)`);
+    }
+  }
+  // JUnit: <testcase name="x">...<failure ...
+  for (const m of clean.matchAll(/<testcase\s+[^>]*name="([^"]+)"[^>]*>(?:(?!<\/testcase>)[\s\S])*?<failure/g)) {
+    const name = m[1].slice(0, 140);
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      rows.push(`test: ${name} (JUnit)`);
+    }
+  }
+  return rows.slice(0, 8);
+}
+
 export function extractFailures(text, kind = "custom") {
   const clean = String(text ?? "").replace(/\x1b\[[0-9;]*m/g, "").split("\n");
   const pats = FAILURE_PATTERNS[kind] ?? FAILURE_PATTERNS.custom;
@@ -1370,6 +1608,19 @@ export function extractFailures(text, kind = "custom") {
     if (pats.some((p) => p.test(l)) && !seen.has(l)) {
       seen.add(l);
       out.push(l.slice(0, 160));
+    }
+  }
+  // For test output, also surface per-test failure rows from TAP/JUnit — but
+  // only when the test name wasn't already surfaced by a raw pattern line.
+  if (kind === "test") {
+    for (const row of parseTestFailures(text)) {
+      if (out.length >= 8) break;
+      const name = row.slice(row.indexOf(": ") + 2, row.lastIndexOf(" ("));
+      if (name && out.some((l) => l.includes(name))) continue;
+      if (!seen.has(row)) {
+        seen.add(row);
+        out.push(row);
+      }
     }
   }
   return out;
@@ -1530,6 +1781,58 @@ export function gateResult(cmd, cwd, timeoutMs, kind = "custom") {
     const output = failures.length ? failures.join("\n") + (t ? "\n… (tail)\n" + t : "") : t;
     return { ok: false, output, failures };
   }
+}
+
+// ---- Selective test selection (gap #1) ----------------------------------
+// Narrow the verify command to the tests affected by the changed files, for
+// recognized runners only. Conservative by design: unknown runners, empty
+// changed sets, or any mapping failure → run the FULL command. The review/full
+// gate always runs the full suite regardless (the caller's job).
+const SEL_RE_ESCAPE = /[.*+?^${}()|[\]\\]/g;
+const selEsc = (s) => String(s).replace(SEL_RE_ESCAPE, "\\$&");
+
+/**
+ * Build a narrowed verify command for the changed files.
+ * Returns { type: "full" } (run everything) or { type: "selective", cmd, label }.
+ */
+export function testSelector(verifyCmd, changedFiles) {
+  const cmd = String(verifyCmd ?? "").trim();
+  const changed = (Array.isArray(changedFiles) ? changedFiles : [])
+    .map(String)
+    .filter((f) => f && !isIgnored(f, DEFAULT_CONFIG.ignore));
+  if (!cmd || !changed.length) return { type: "full" };
+  const testFiles = changed.filter((f) => /\.(test|spec)\.[a-z0-9]+$/i.test(f));
+  // node --test: run only the changed test files (full when none are tests).
+  if (/node --test\b/.test(cmd)) {
+    if (!testFiles.length) return { type: "full" };
+    return { type: "selective", cmd: `node --test ${testFiles.map(shq).join(" ")}`, label: `node --test (${testFiles.length} changed test file${testFiles.length > 1 ? "s" : ""})` };
+  }
+  // jest: --testPathPattern from the changed source/test paths.
+  if (/\bjest\b/.test(cmd)) {
+    const pat = changed.map((f) => selEsc(f).replace(/\.[a-z0-9]+$/i, "")).join("|");
+    if (!pat) return { type: "full" };
+    return { type: "selective", cmd: `${cmd} --testPathPattern "${pat}" --silent`, label: `jest --testPathPattern (${changed.length} changed file${changed.length > 1 ? "s" : ""})` };
+  }
+  // vitest: run the changed files directly.
+  if (/\bvitest\b/.test(cmd)) {
+    return { type: "selective", cmd: `${cmd} run ${changed.map(shq).join(" ")}`, label: `vitest run (${changed.length} changed file${changed.length > 1 ? "s" : ""})` };
+  }
+  // pytest: -k on changed module names.
+  if (/\bpytest\b/.test(cmd)) {
+    const mods = [...new Set(changed.map((f) => f.split("/").pop().replace(/\.py$/i, "").replace(/^test_/, "").replace(/_test$/, "")))].filter(Boolean);
+    if (!mods.length) return { type: "full" };
+    return { type: "selective", cmd: `${cmd} -k "${mods.map(selEsc).join(" or ")}"`, label: `pytest -k (${mods.length} module${mods.length > 1 ? "s" : ""})` };
+  }
+  // go test: package(s) of the changed files.
+  if (/\bgo\s+test\b/.test(cmd)) {
+    const pkgs = [...new Set(changed.map((f) => {
+      const i = f.lastIndexOf("/");
+      return i > 0 ? f.slice(0, i) : ".";
+    }))];
+    return { type: "selective", cmd: `${cmd} ${pkgs.map(shq).join(" ")}`, label: `go test (${pkgs.length} package${pkgs.length > 1 ? "s" : ""})` };
+  }
+  // Unknown runner → never guess; run the full command.
+  return { type: "full" };
 }
 
 /** One `git status --porcelain` spawn shared by the status line + changed set. */
@@ -1901,6 +2204,7 @@ export function reportRows(run) {
   rows.push(["EFFICIENCY", "", ""]);
   rows.push(
     ["gate runs / fails", `${st.gateRuns ?? 0} / ${st.gateFails ?? 0}`, "per-edit gate runs / fails"],
+    ["gate cache hits", `${st.gateCacheHits ?? 0}`, "cross-run green gates reused (gap #2)"],
     ["turns", `${fmt(st.turns)} / ${run.budget?.maxTurns ?? "?"}`, "used / budget"],
     ["calls", fmt(st.calls), "API calls"],
     ["est. cost", `$${(st.cost ?? 0).toFixed(4)}`, "total, all rates"],

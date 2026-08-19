@@ -60,6 +60,21 @@ import {
   shouldEscalate,
   shouldStop,
   parseCommitSubject,
+  gitHead,
+  changedPaths,
+  loadGateCache,
+  gateCacheKey,
+  cachedGreen,
+  recordGreen,
+  invalidateGreen,
+  loadGateFailures,
+  recordGateFailure,
+  failureTriage,
+  parseTestFailures,
+  testSelector,
+  dangerTier,
+  editRequiresGate,
+  nearestPackageDir,
 } from "./harness-core.mjs";
 
 const CWD = process.cwd();
@@ -1182,4 +1197,196 @@ test("edit-mismatch marker regex catches both edit-tool miss variants", () => {
   assert.ok(EDIT_MISS_RE.test("Could not find edits[3] in harness/index.ts."), "batch edits[N] form");
   assert.ok(EDIT_MISS_RE.test("Could not find the exact text in harness/index.ts."), "single-edit form");
   assert.ok(!EDIT_MISS_RE.test("Successfully replaced 1 block(s) in x."), "success path stays silent");
+});
+
+// ---- Cross-run gate cache (gap #2) ---------------------------------------
+test("gateCacheKey is stable and distinct", () => {
+  const a = gateCacheKey({ verifyCmd: "npm test", head: "abc", porcelain: ["a.ts", "b.ts"] });
+  assert.equal(a, gateCacheKey({ verifyCmd: "npm test", head: "abc", porcelain: ["a.ts", "b.ts"] }));
+  assert.notEqual(a, gateCacheKey({ verifyCmd: "npm test", head: "abc", porcelain: ["b.ts", "a.ts"] }), "porcelain order matters");
+  assert.notEqual(a, gateCacheKey({ verifyCmd: "npm test", head: "def", porcelain: ["a.ts", "b.ts"] }), "head matters");
+  assert.notEqual(a, gateCacheKey({ verifyCmd: "npm run test", head: "abc", porcelain: ["a.ts", "b.ts"] }), "verifyCmd matters");
+});
+
+test("recordGreen then cachedGreen reuses the verdict; changed tree misses", () => {
+  const dir = makeProject({});
+  try {
+    const st = { verifyCmd: "npm test", head: "abc", porcelain: ["src/a.ts"] };
+    assert.equal(cachedGreen(dir, st), null, "no cache yet");
+    recordGreen(dir, st);
+    const hit = cachedGreen(dir, st);
+    assert.equal(hit.ok, true);
+    assert.equal(hit.cached, true);
+    // Changed tree (different porcelain) → miss, never stale-green.
+    assert.equal(cachedGreen(dir, { ...st, porcelain: ["src/b.ts"] }), null);
+    assert.equal(cachedGreen(dir, { ...st, head: "zzz" }), null);
+  } finally {
+    rmProject(dir);
+  }
+});
+
+test("invalidateGreen drops a cached entry", () => {
+  const dir = makeProject({});
+  try {
+    const st = { verifyCmd: "npm test", head: "abc", porcelain: [] };
+    recordGreen(dir, st);
+    assert.ok(cachedGreen(dir, st));
+    invalidateGreen(dir, st);
+    assert.equal(cachedGreen(dir, st), null);
+  } finally {
+    rmProject(dir);
+  }
+});
+
+test("gate cache is capped and survives reload", () => {
+  const dir = makeProject({});
+  try {
+    for (let i = 0; i < 25; i++) recordGreen(dir, { verifyCmd: `cmd${i}`, head: `h${i}`, porcelain: [] });
+    const { entries } = loadGateCache(dir);
+    assert.equal(entries.length, 20, "capped at 20");
+    assert.equal(entries[0].verifyCmd, "cmd24", "newest first");
+  } finally {
+    rmProject(dir);
+  }
+});
+
+test("loadGateCache tolerates a missing/corrupt file", () => {
+  const dir = makeProject({});
+  try {
+    assert.deepEqual(loadGateCache(dir), { entries: [] });
+    mkdirSync(join(dir, ".harness/longterm"), { recursive: true });
+    writeFileSync(join(dir, ".harness/longterm/gate-cache.json"), "not json", "utf8");
+    assert.deepEqual(loadGateCache(dir), { entries: [] });
+  } finally {
+    rmProject(dir);
+  }
+});
+
+// ---- Auto-triage of gate failures (gap #6) --------------------------------
+test("failureTriage classifies a repeat failure as KNOWN", () => {
+  const prior = { output: "FAIL src/a.test.js: 1) parseAcceptance works\nAssertionError: expected 2 to equal 3" };
+  const same = "FAIL src/a.test.js: 1) parseAcceptance works\nAssertionError: expected 2 to equal 3";
+  const triage = failureTriage(same, [prior]);
+  assert.equal(triage.kind, "known");
+  assert.ok(triage.score > 0.5);
+});
+
+test("failureTriage marks an unrelated failure NEW", () => {
+  const prior = { output: "FAIL src/a.test.js: parseAcceptance works" };
+  const other = "Cannot read properties of undefined (reading 'map')\nTypeError at src/b.ts:12";
+  assert.equal(failureTriage(other, [prior]).kind, "new");
+  assert.equal(failureTriage("", [prior]).kind, "new");
+  assert.equal(failureTriage("x", []).kind, "new");
+});
+
+test("recordGateFailure persists and dedups by hash", () => {
+  const dir = makeProject({});
+  try {
+    recordGateFailure(dir, { output: "boom error at line 1" });
+    recordGateFailure(dir, { output: "boom error at line 1" });
+    recordGateFailure(dir, { output: "different failure here" });
+    const recs = loadGateFailures(dir);
+    assert.equal(recs.length, 2);
+    assert.ok(recs.some((r) => r.output.includes("boom")));
+    recordGateFailure(dir, { output: "  " });
+    assert.equal(loadGateFailures(dir).length, 2, "blank output not recorded");
+  } finally {
+    rmProject(dir);
+  }
+});
+
+// ---- Structured test-runner output (gap #5) --------------------------------
+test("parseTestFailures extracts TAP rows", () => {
+  const rows = parseTestFailures("ok 1 passes\nnot ok 2 - parseAcceptance fails\nnot ok 3 - plan progress miscounts");
+  assert.equal(rows.length, 2);
+  assert.ok(rows[0].includes("parseAcceptance fails"));
+  assert.ok(rows[0].endsWith("(TAP)"));
+});
+
+test("parseTestFailures extracts JUnit rows and caps at 8", () => {
+  const xml = '<testsuite><testcase name="alpha"><failure/></testcase><testcase name="beta"><failure/></testcase></testsuite>';
+  const rows = parseTestFailures(xml);
+  assert.equal(rows.length, 2);
+  assert.ok(rows[0].includes("alpha"));
+  assert.ok(rows[1].includes("beta"));
+  const many = "not ok " + Array.from({ length: 20 }, (_, i) => `${i + 1} - t${i}`).join("\nnot ok ");
+  assert.ok(parseTestFailures(many).length <= 8);
+});
+
+// ---- Selective tests (gap #1) ----------------------------------------------
+test("testSelector: unknown runner returns full", () => {
+  assert.deepEqual(testSelector("npm run test", ["src/a.ts"]), { type: "full" });
+  assert.deepEqual(testSelector("", ["src/a.ts"]), { type: "full" });
+  assert.deepEqual(testSelector("jest", []), { type: "full" });
+  assert.deepEqual(testSelector("node --test x", []), { type: "full" });
+});
+
+test("testSelector: node --test runs changed test files", () => {
+  const sel = testSelector("node --test", ["src/a.test.js", "src/b.js"]);
+  assert.equal(sel.type, "selective");
+  assert.ok(sel.cmd.includes("a.test.js"));
+  assert.ok(!sel.cmd.includes("b.js"));
+  // No changed test files → full.
+  assert.deepEqual(testSelector("node --test", ["src/lib.js"]), { type: "full" });
+});
+
+test("testSelector: jest / vitest / pytest / go", () => {
+  const j = testSelector("jest", ["src/foo.ts", "src/bar.test.ts"]);
+  assert.equal(j.type, "selective");
+  assert.ok(j.cmd.includes("--testPathPattern"));
+  assert.ok(j.cmd.includes("foo"));
+  assert.ok(testSelector("vitest", ["src/x.test.ts"]).cmd.includes("vitest run"));
+  const p = testSelector("pytest", ["tests/test_a.py", "tests/b.py"]);
+  assert.equal(p.type, "selective");
+  assert.ok(p.cmd.includes("-k"));
+  const g = testSelector("go test ./...", ["pkg/foo.go", "pkg/bar.go"]);
+  assert.equal(g.type, "selective");
+  assert.ok(g.cmd.includes("pkg"));
+});
+
+// ---- Warn→confirm tiers (gap #9) --------------------------------------------
+test("dangerTier maps patterns to block/confirm/allow", () => {
+  const tiers = { "rm -rf /|~|$HOME": "confirm", "mkfs": "allow" };
+  assert.equal(dangerTier("rm -rf /", tiers).tier, "confirm");
+  assert.equal(dangerTier("mkfs /dev/sda", tiers).tier, "allow");
+  assert.equal(dangerTier("rm -rf ~", {}).tier, "block", "default block");
+  assert.deepEqual(dangerTier("ls -la", tiers), { tier: null }, "safe command");
+  assert.equal(dangerTier("rm -rf ~", tiers).pattern, "rm -rf /|~|$HOME");
+});
+
+// ---- Skip-gate on doc edits (gap #8) ----------------------------------------
+test("editRequiresGate: doc-only edits skip, code edits gate", () => {
+  assert.equal(editRequiresGate(["README.md", "docs/guide.txt"]), false);
+  assert.equal(editRequiresGate([]), false);
+  assert.equal(editRequiresGate(["src/a.ts"]), true);
+  assert.equal(editRequiresGate(["README.md", "src/a.ts"]), true, "any code file gates");
+  assert.equal(editRequiresGate(["package.json"]), true, "config files gate");
+});
+
+// ---- Monorepo per-package gates (gap #10) -----------------------------------
+test("nearestPackageDir: single nested package wins, cross-package → root", () => {
+  const dir = makeProject({
+    "package.json": "{}",
+    "packages/a/package.json": "{}",
+    "packages/b/package.json": "{}",
+  });
+  try {
+    const a = nearestPackageDir(["packages/a/src/x.ts"], dir);
+    assert.equal(a, join(dir, "packages/a"));
+    const mixed = nearestPackageDir(["packages/a/src/x.ts", "packages/b/src/y.ts"], dir);
+    assert.equal(mixed, null, "cross-package → root gate");
+    assert.equal(nearestPackageDir([], dir), null);
+  } finally {
+    rmProject(dir);
+  }
+});
+
+test("gitHead/changedPaths are resilient outside a repo", () => {
+  const dir = makeProject({});
+  try {
+    assert.equal(typeof gitHead(dir), "string");
+    assert.ok(Array.isArray(changedPaths(dir)));
+  } finally {
+    rmProject(dir);
+  }
 });
