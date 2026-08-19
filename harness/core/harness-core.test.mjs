@@ -40,6 +40,7 @@ import {
   suggestBudget,
   parsePlanProgress,
   stageSkillCard,
+  stageLayerCard,
   summarizeToolOutput,
   verifyTier,
   ensureArtifactDirs,
@@ -357,6 +358,19 @@ test("stageSkillCard maps run stages to operating-discipline cards", () => {
 
 // Idea #1 (phase-scoped cards) residual gap: every stage the dev loop actually
 // runs must map to a card, so none silently falls back to the builder default.
+test("stageLayerCard layers an extra lens onto requirements only", () => {
+  assert.equal(stageLayerCard("requirements"), "first-principles");
+  assert.equal(stageLayerCard("ideation"), null);
+  assert.equal(stageLayerCard("plan"), null);
+  assert.equal(stageLayerCard("plan-review"), null);
+  assert.equal(stageLayerCard("development"), null);
+  assert.equal(stageLayerCard("build"), null);
+  assert.equal(stageLayerCard("review"), null);
+  assert.equal(stageLayerCard("verify"), null);
+  assert.equal(stageLayerCard("unknown"), null);
+  assert.equal(stageLayerCard(null), null);
+});
+
 test("every run stage maps to a non-null skill card (no default fallback)", () => {
   const stages = ["ideation", "requirements", "plan", "plan-review", "development", "build", "review", "verify"];
   for (const s of stages) assert.ok(stageSkillCard(s), `stage "${s}" must map to a card`);

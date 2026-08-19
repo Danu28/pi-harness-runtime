@@ -698,6 +698,20 @@ export function stageSkillCard(stage) {
   return STAGE_CARD[String(stage ?? "").toLowerCase()] ?? null;
 }
 
+// Layered operating-discipline lenses (composed WITH the primary stage card, not
+// replacing it). first-principles is the question/delete lens applied before
+// planning locks in — it complements the reviewer's plan-contract gate at the
+// requirements stage. Only the stage-default path layers; an explicit
+// `skillCard` config stays authoritative.
+const STAGE_LAYER_CARD = {
+  requirements: "first-principles",
+};
+
+/** Extra skill-card lens layered onto a stage's primary card, or null. */
+export function stageLayerCard(stage) {
+  return STAGE_LAYER_CARD[String(stage ?? "").toLowerCase()] ?? null;
+}
+
 /**
  * Verify tier selection (revised-plan A6). Returns "quick" | "standard" |
  * "full" based on lane + plan footprint + prior pass-verified status.

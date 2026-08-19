@@ -68,6 +68,7 @@ import {
   gate1Required,
   classifyLane,
   stageSkillCard,
+  stageLayerCard,
   ensureArtifactDirs,
   clearTempDir,
   isHarnessPath,
@@ -561,17 +562,38 @@ function skillCardNote(cfg: Record<string, unknown>, stage?: string, stats?: { s
   // configured skillCard (or the builder default) only when the stage has no
   // mapped card. A explicit config `skillCard: <name>` always wins over the
   // stage default.
+  const explicit = cfg.skillCard as string | null | undefined;
   const stageCard = stage ? stageSkillCard(stage) : null;
-  const name = cfg.skillCard ?? stageCard ?? DEFAULT_CONFIG.skillCard;
+  const name = explicit ?? stageCard ?? DEFAULT_CONFIG.skillCard;
   if (!name) return "";
-  const card =
-    loadSkillCard(join(HERE, "core", "skillcards"), String(name)) ||
-    loadSkillCard(join(getAgentDir(), "extensions", "core", "skillcards"), String(name));
-  if (!card) return "";
-  // Idea #1 telemetry: count the injected card's tokens (advisory — the report
-  // shows how much context the operating-discipline card costs per run).
-  if (stats) stats.skillCardTokens = (stats.skillCardTokens ?? 0) + estimateTokens(card);
-  return `\n\n## Operating discipline (skill card: ${name})\n${card}\nThe harness protocol above governs — if a card rule conflicts with it, the harness protocol wins.`;
+  const load = (n: string) =>
+    loadSkillCard(join(HERE, "core", "skillcards"), n) ||
+    loadSkillCard(join(getAgentDir(), "extensions", "core", "skillcards"), n);
+  const blocks: string[] = [];
+  let tokens = 0;
+  const primary = load(String(name));
+  if (primary) {
+    blocks.push(`## Operating discipline (skill card: ${name})\n${primary}`);
+    tokens += estimateTokens(primary);
+  }
+  // Layered extra lens: compose WITH the primary card, not instead of it. Only
+  // on the stage-default path — an explicit `skillCard` config is authoritative
+  // and suppresses layering. (stageLayerCard lives in harness-core.mjs.)
+  if (!explicit && stage) {
+    const layer = stageLayerCard(stage);
+    if (layer && layer !== name) {
+      const lc = load(layer);
+      if (lc) {
+        blocks.push(`## Operating discipline (skill card: ${layer})\n${lc}`);
+        tokens += estimateTokens(lc);
+      }
+    }
+  }
+  if (!blocks.length) return "";
+  // Idea #1 telemetry: count the injected card(s)' tokens (advisory — the report
+  // shows how much context the operating-discipline cards cost per run).
+  if (stats) stats.skillCardTokens = (stats.skillCardTokens ?? 0) + tokens;
+  return `\n\n${blocks.join("\n\n")}\nThe harness protocol above governs — if a card rule conflicts with it, the harness protocol wins.`;
 }
 
 const DEFAULT_PROTOCOL = `# Harness run — efficient task execution
