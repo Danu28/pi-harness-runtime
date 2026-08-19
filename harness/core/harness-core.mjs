@@ -1244,6 +1244,19 @@ export function isHarnessPath(rel) {
   return rel === ".harness" || rel.startsWith(".harness/");
 }
 
+/**
+ * True when a relative path is a TOP-LEVEL memory path (memory/ or memory/**).
+ * The artifact-filing protocol is STRICT here: memory files (plan, progress,
+ * decisions, knowledge, problems, failures) must live under
+ * .harness/longterm/memory/ — never a top-level memory/ directory. This is the
+ * hard block counterpart to the isHarnessPath carve-out: writes to these paths
+ * are refused even when declared, so a mis-filed memory doc can't slip through
+ * strict scope.
+ */
+export function isForbiddenArtifactPath(rel) {
+  return rel === "memory" || rel.startsWith("memory/");
+}
+
 // ---- Cross-run gate cache (gap #2) --------------------------------------
 // Reuse a last-green gate verdict when the git state (HEAD + working-tree
 // porcelain set) EXACTLY matches a prior green run. Same commit + same mods ⇒

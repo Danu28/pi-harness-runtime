@@ -46,6 +46,7 @@ import {
   ensureArtifactDirs,
   clearTempDir,
   isHarnessPath,
+  isForbiddenArtifactPath,
   TEMP_DIR,
   LONGTERM_DIR,
   parsePersona,
@@ -463,6 +464,20 @@ test("artifact dirs: ensure + clear temp, keep longterm, path carve-out", () => 
   } finally {
     rmProject(dir);
   }
+});
+
+test("isForbiddenArtifactPath — top-level memory is hard-blocked, .harness is not", () => {
+  // STRICT rule: never a top-level memory/ directory.
+  assert.equal(isForbiddenArtifactPath("memory"), true);
+  assert.equal(isForbiddenArtifactPath("memory/plan.md"), true);
+  assert.equal(isForbiddenArtifactPath("memory/sub/decisions.md"), true);
+  // .harness/ memory is the sanctioned home — never blocked.
+  assert.equal(isForbiddenArtifactPath(".harness/longterm/memory/plan.md"), false);
+  assert.equal(isForbiddenArtifactPath(".harness/temp/scratch.md"), false);
+  // Unrelated / prefix-safe paths pass through.
+  assert.equal(isForbiddenArtifactPath("src/main.js"), false);
+  assert.equal(isForbiddenArtifactPath("memory-foo/notes.md"), false);
+  assert.equal(isForbiddenArtifactPath("memories/x.md"), false);
 });
 
 test("parsePlanProgress computes done/remaining/current from checkbox ticks", () => {

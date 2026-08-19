@@ -72,6 +72,7 @@ import {
   ensureArtifactDirs,
   clearTempDir,
   isHarnessPath,
+  isForbiddenArtifactPath,
   gate2Required,
   parsePlanProgress,
   verifyTier,
@@ -1156,6 +1157,16 @@ export default function harness(pi: ExtensionAPI) {
       const run = activeRun;
       if (!run) return { content: [{ type: "text", text: "No active harness run." }], details: {} };
       const declared = [...new Set(params.files.map((f) => normalizeRel(String(f), run.cwd)))];
+      // Artifact-filing STRICT rule: reject top-level memory/ declarations up
+      // front so the agent learns the correction at declare time instead of at
+      // the write gate (which also hard-blocks them). Memory belongs under
+      // .harness/longterm/memory/ — never a top-level memory/ directory.
+      const rejected = declared.filter(isForbiddenArtifactPath);
+      if (rejected.length) {
+        const kept = declared.filter((d) => !isForbiddenArtifactPath(d));
+        declared.length = 0;
+        declared.push(...kept);
+      }
       // Validate existence so a typo'd/mis-named path surfaces immediately instead
       // of confusing the user when their edit is later blocked or silently scoped.
       const missing = declared.filter((d) => {
@@ -1201,14 +1212,17 @@ export default function harness(pi: ExtensionAPI) {
       // Stage persona: switch from the Product Owner role to the Senior Developer
       // role for the editing phase, carrying the task-adaptive domain focus.
       const personaNote = ` ${renderPersona("development", run.persona?.domain ?? null)}`;
+      const rejectedWarn = rejected.length
+        ? ` Rejected top-level memory path(s): ${rejected.join(", ")} — memory files must live under .harness/longterm/memory/ (temp/scratch under .harness/temp/), never a top-level memory/ directory.`
+        : "";
       return {
         content: [
           {
             type: "text",
-            text: `Scope declared (${declared.length}): ${declared.join(", ") || "(none)"}. Edits outside these files are blocked while strict scope is on.${warn}${planNote}${personaNote}`,
+            text: `Scope declared (${declared.length}): ${declared.join(", ") || "(none)"}. Edits outside these files are blocked while strict scope is on.${rejectedWarn}${warn}${planNote}${personaNote}`,
           },
         ],
-        details: { declared, missing },
+        details: { declared, missing, rejected },
       };
     },
   });
@@ -1396,6 +1410,19 @@ export default function harness(pi: ExtensionAPI) {
           writeRun(run);
         }
         return;
+      }
+      // Hard block (protocol STRICT rule): a top-level memory/ directory is
+      // forbidden — memory files must live under .harness/longterm/memory/.
+      // This runs before declare/scope so a mis-filed memory doc is refused even
+      // if the agent declared it. Temp/scratch likewise belong under .harness/.
+      if (isForbiddenArtifactPath(rel)) {
+        run.stats.blockedEdits++;
+        writeRun(run);
+        return {
+          block: true,
+          reason:
+            `HARNESS: blocked — ${rel} is a top-level memory/ path, which the protocol forbids. Memory files (plan/progress/decisions/knowledge/problems/failures) must live under .harness/longterm/memory/; temp/scratch under .harness/temp/. File it there instead.`,
+        };
       }
       if (declareRequired(run.scope.declared, run.scope.strict)) {
         run.stats.blockedEdits++;
