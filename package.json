@@ -2,7 +2,15 @@
   "name": "harness",
   "version": "1.12.0",
   "description": "pi extension: /run autonomous task harness — baseline, declared scope, gate-verified edits, telemetry report, crash recovery",
-  "keywords": ["pi", "pi-extension", "extension", "harness", "run", "automation", "agent"],
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "extension",
+    "harness",
+    "run",
+    "automation",
+    "agent"
+  ],
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,7 +18,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test harness/core/harness-core.test.mjs",
+    "test": "node --test \"harness/core/*.test.mjs\"",
     "validate-skills": "node harness/core/compile-skills.mjs"
   },
   "devDependencies": {

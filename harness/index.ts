@@ -105,148 +105,14 @@ import {
   nearestPackageDir,
 } from "./core/harness-core.mjs";
 
-// Self-contained anchor: this extension's own directory, wherever pi loaded it
-// from (~/.pi/agent/extensions/harness/ as a subdir copy, or extensions/ flat).
-// Skill cards and the run protocol resolve relative to HERE first, so the whole
-// harness ships in one folder and install = copy that folder into place.
-const HERE = dirname(fileURLToPath(import.meta.url));
+import type { ThinkingLevel, RunState } from "./index-consts.ts";
+import { HERE, EXPECTED_CORE_VERSION, staleCore, RUN_DIR, RUN_FILE, LAST_RUN_FILE, SETTLE_CAP_MS } from "./index-consts.ts";
+import { contentText, lastAssistantText } from "./settle.ts";
+import { printReport } from "./report.ts";
+import { planLevel, editLevel, startThinking, tierMeaning } from "./thinking.ts";
+import { loadHarnessConfig, readProtocol } from "./protocol.ts";
+import { activeCardNames, skillCardNote } from "./cards.ts";
 
-/**
- * Must match CORE_VERSION in harness-core.mjs. If a /reload served a stale
- * core (node's ESM cache pins .mjs deps — jiti's moduleCache only covers its
- * own transforms), the mismatch catches it and /run explains instead of
- * crashing with a cryptic "X is not a function".
- */
-const EXPECTED_CORE_VERSION = "1.13.1";
-let staleCore = CORE_VERSION !== EXPECTED_CORE_VERSION;
-
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
-interface RunState {
-  task: string;
-  cwd: string;
-  verifyCmd: string | null;
-  verifyLabel: string;
-  verifyKind: "script" | "tsc" | "test" | "vet" | "compile" | "syntax" | "custom" | "none";
-  verifyCwd: string;
-  fullCmd: string | null;
-  fullLabel: string | null;
-  timeoutMs: number;
-  scope: { declared: string[]; strict: boolean };
-  budget: {
-    maxTurns: number;
-    maxConsecutiveFails: number;
-    deEscalateAfter: number;
-    absMaxTurns: number;
-    softBudgetPct: number;
-    maxExtensions: number;
-    maxCost: number | null; // optional $ ceiling (--budget / maxCost) for the cost soft-warning
-    softAsked: boolean;
-    pendingEstimate: number | null;
-    estBias: { n: number; bias: number } | null;
-  };
-  autoCommit: boolean;
-  autoCommitResult?: { committed: boolean; count?: number; message?: string; reason?: string; leftover?: string[] };
-  settleCap?: boolean; // run was force-finalized by the settle cap, not a real agent_settled
-  budgetWarnings?: string[];
-  budgetOverage?: boolean; // T2: turns crossed the budget via a text-only tail (no tool calls)
-  ladder: { thinkingStart: ThinkingLevel; thinkingEscalated: ThinkingLevel; escalated: boolean };
-  // planning.thinkLevel = level during the pre-declare planning phase (--think, else
-  // AI prediction, else thinkingStart). planning.editLevel = level after declare
-  // (--edit, else thinkingStart). done = scope declared (planning ended).
-  planning: { thinkLevel: ThinkingLevel | null; editLevel: ThinkingLevel | null; done: boolean };
-  // plan = the model's structured planning artifact (revised-plan A2b).
-  // goal = restated user task; anchors = high-level plan body; tasks = priority
-  // list with per-task footprint; risky = boundary/risk notes present (drives
-  // Gate 2). Captured before scope is declared; surfaced in resume + report.
-  plan: {
-    goal: string;
-    anchors: string;
-    tasks: { text: string; footprint: string }[];
-    risky: boolean;
-    // candidates = the brainstormer's `## Candidate Requirements` (ideation
-    // feature), captured before the plan; feeds Gate 1.
-    candidates: string[];
-    // Gate 1 (ideas review) status: null = not triggered, "pending" = reviewer
-    // must challenge the candidates, "passed"/"skipped" = cleared,
-    // "rejected" = ideation concluded no viable idea (no build).
-    gate1: "pending" | "passed" | "skipped" | "rejected" | null;
-    // Gate 2 (plan review) status: null = not triggered, "pending" = reviewer
-    // required, "passed" = reviewer approved, "skipped" = user override.
-    gate2: "pending" | "passed" | "skipped" | null;
-    // progress = execution progress (A4): done/total/remaining/current task,
-    // updated from the model's checkbox ticks during development.
-    progress: { done: number; total: number; remaining: number; current: string | null };
-  };
-  // Run lifecycle stage. planning → (harness_declare) → development →
-  // (harness_review) → review. Printed so the user sees which stage is active.
-  stage: "planning" | "development" | "review";
-  // Run phase (ideation feature): "ideate" runs a divergent brainstorm phase
-  // (brainstormer card) before filtering (Gate 1) and planning; "implement" is
-  // the default pipeline. Set via --phase flag or the `Phase:` marker.
-  phase: "ideate" | "implement";
-  phaseForced: boolean; // true when the user passed --phase (marker cannot override)
-  // persona.domain = task-adaptive domain focus (taxonomy entry). Stage role is
-  // fixed (Product Owner / Senior Developer / Reviewer); domain varies per task.
-  persona: { domain: string | null };
-  // lane = task complexity triage (S/M/L). Resolved once: --lane flag → model
-  // "Lane:" marker → classifyLane() heuristic → default M. Gate 1/2 are
-  // conditional on L; S/M skip them. laneForced = user mandated via --lane.
-  lane: "S" | "M" | "L";
-  laneForced: boolean;
-  // verifyTier = code-selected review depth (quick | standard | full) from lane
-  // + plan footprint + prior pass status (revised-plan A6).
-  verifyTier: "quick" | "standard" | "full";
-  stats: {
-    calls: number;
-    tokensIn: number;
-    tokensCached: number;
-    tokensOut: number;
-    gateRuns: number;
-    gateFails: number;
-    blockedEdits: number;
-    consecutiveFails: number;
-    consecutivePasses: number;
-    turns: number;
-    cost: number;
-    extensionCount: number;
-    warned50: boolean;
-    // gateDirty: a bash/event may have changed the tree since the last gate, so
-    // the review-gate dedup must not reuse a stale result. Set on any bash, cleared
-    // whenever the gate re-verifies. warnedCost50: one-shot cost soft-warning.
-    gateDirty: boolean;
-    warnedCost50: boolean;
-    knownFiles: string[];
-    pendingNewFiles?: string[];
-    skillCardTokens?: number; // idea #1: operating-discipline card tokens injected this run
-    peakTurnCost: number;
-    gateCacheHits?: number; // gap #2: cross-run green gates reused from cache
-    finalGate?: { ok: boolean };
-    finalFull?: { ok: boolean };
-  };
-  baseline: { ok: boolean; head: string } | null;
-  baselineFull: { ok: boolean; head: string } | null;
-  // Acceptance closure (v1.13): the model's acceptance statement (verdict +
-  // criteria), the task-targeted probe result (acceptCmd), the failure-memory
-  // check, and the cross-run trend hint — surfaced in the report; auto-commit
-  // is blocked on an "unmet" verdict.
-  acceptance: { verdict: "met" | "partial" | "unmet" | null; criteria: { text: string; done: boolean }[] };
-  acceptCmd: string | null;
-  acceptResult: { ok: boolean; head: string } | null;
-  memoryCheck: { ok: boolean; note: string } | null;
-  trend: { median: number; n: number; suggestion: number; reason: string } | null;
-  estRemaining: number | null;
-  commitSubject?: string | null; // commit subject from the model's final summary (auto-commit quality)
-  resumeCount: number;
-  prevThinking: ThinkingLevel;
-  status: "prepared" | "running" | "done" | "stopped";
-  startedAt: string;
-  endedAt: string | null;
-}
-
-const RUN_DIR = ".harness";
-const RUN_FILE = join(RUN_DIR, "run.json");
-const LAST_RUN_FILE = join(RUN_DIR, "last-run.json");
 
 let activeRun: RunState | null = null;
 let settleWaiter: (() => void) | null = null;
@@ -258,9 +124,6 @@ let settledNaturally = false;
 // late-sync (gate + auto-commit) that tail instead of silently losing it.
 // Cleared at run start/reset so a stale sync can never fire into a new run.
 let tailSyncRun: RunState | null = null;
-// Cap for how long /run waits for the agent to settle; a genuinely long task
-// past this is finalized anyway (with a warning). Override via env.
-const SETTLE_CAP_MS = Number(process.env.HARNESS_SETTLE_CAP_MS ?? 30 * 60_000);
 // writeRun is trailing-debounced so bursts of telemetry (turn_start,
 // message_end, tool_result) coalesce into one disk write instead of one per
 // event. State is still flushed synchronously at stop/done for crash recovery.
@@ -287,80 +150,6 @@ function waitForSettle(): Promise<void> {
     }, SETTLE_CAP_MS);
     cap.unref?.();
   });
-}
-
-/** The last assistant message's text (used to read the model's remaining estimate). */
-/** Extract text from an assistant message's content (string or part array). */
-function contentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return (content as { type?: string; text?: string }[])
-      .filter((p) => p?.type === "text")
-      .map((p) => p.text ?? "")
-      .join("\n");
-  }
-  return "";
-}
-
-function lastAssistantText(ctx: ExtensionCommandContext): string {
-  try {
-    const entries = ctx.sessionManager.getEntries() ?? [];
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i] as { type?: string; message?: { role?: string; content?: unknown } } | undefined;
-      if (e?.type === "message" && e.message?.role === "assistant") {
-        const c = e.message.content;
-        if (typeof c === "string") return c;
-        if (Array.isArray(c)) {
-          return (c as { type?: string; text?: string }[])
-            .filter((p) => p?.type === "text")
-            .map((p) => p.text ?? "")
-            .join("\n");
-        }
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return "";
-}
-
-/** Print the HARNESS REPORT table + gate notes. */
-function printReport(run: RunState, ctx: { ui?: { notify?: (text: string, level?: string) => void } }) {
-  const lines = [
-    `=== HARNESS REPORT ===`,
-    buildTldr(run),
-    `task: ${run.task}${run.resumeCount > 0 ? ` (resumed x${run.resumeCount})` : ""}`,
-    renderTable(reportRows(run), { color: false }),
-  ];
-  if (run.verifyKind === "none") {
-    lines.push("Note: no verify gate — correctness rests on the diff review. Add harness.json (verifyCmd) to enable one.");
-  } else if (run.verifyKind === "syntax") {
-    lines.push("Note: the gate is a syntax check only — review the diff for correctness before shipping.");
-  }
-  if (run.status === "stopped") {
-    lines.push("Resume with /harness-resume [extraTurns] to continue this run (e.g. /harness-resume 10).");
-  }
-  if (run.budgetOverage) {
-    lines.push("Note: turns exceeded the budget (text-only tail, no tool calls) — the hard stop fires at the next tool call; the run settled naturally.");
-  }
-  if (run.plan?.gate1 === "rejected") {
-    lines.push("Ideation concluded: no viable idea — no build was performed. Use /run --phase ideate to explore other ideas.");
-  }
-  lines.push("=== END HARNESS REPORT ===");
-  const text = lines.join("\n");
-  // Interactive TUI: render through the notification path so the report shows as
-  // a discrete banner instead of raw console output interleaved mid-response.
-  // Piped/RPC contexts (no TTY, e.g. the smoke suite) keep stdout/stderr output
-  // so report markers stay machine-capturable.
-  if (process.stdout.isTTY && !process.env.NO_COLOR) {
-    try {
-      ctx.ui?.notify?.(text, "info");
-      return;
-    } catch {
-      /* fall through to console */
-    }
-  }
-  console.log(text);
 }
 
 function runPath(cwd: string) {
@@ -491,139 +280,6 @@ function finishRun(run: RunState, pi: ExtensionAPI) {
   }
   activeRun = null;
 }
-
-// Thinking-level policy. The planning phase (before the model declares its edit
-// scope) runs at planLevel; once scope is declared, editing runs at editLevel.
-// planLevel precedence: user --think → AI prediction (Thinking: marker) →
-// thinkingStart. editLevel precedence: user --edit → thinkingStart. Task lane
-// is deliberately excluded (P1 decouple): a lane must never raise per-turn
-// thinking cost — the reactive fail-ladder is the only edit escalator.
-function planLevel(run: RunState): ThinkingLevel {
-  return phaseThinking({ forcedThink: run.planning?.thinkLevel ?? null, thinkingStart: run.ladder.thinkingStart }).plan;
-}
-function editLevel(run: RunState): ThinkingLevel {
-  return phaseThinking({ forcedEdit: run.planning?.editLevel ?? null, thinkingStart: run.ladder.thinkingStart }).edit;
-}
-// Level to start (or resume) a run at: planning level until scope is declared,
-// editing level once it is.
-function startThinking(run: RunState): ThinkingLevel {
-  return !run.planning?.done ? planLevel(run) : editLevel(run);
-}
-
-/** Human-readable meaning of a verify tier (revised-plan A6). */
-function tierMeaning(tier: "quick" | "standard" | "full"): string {
-  return tier === "quick"
-    ? "skip verifier; build-boundary gate is the check"
-    : tier === "full"
-      ? "tests + review + security + performance audit"
-      : "tests + review";
-}
-
-function loadHarnessConfig(cwd: string): Record<string, unknown> {
-  const p = join(cwd, "harness.json");
-  try {
-    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8"));
-  } catch {
-    /* bad config → defaults */
-  }
-  return {};
-}
-
-function readProtocol(): string {
-  // Self-contained first: the protocol ships inside the extension dir, so a
-  // plain copy of the harness/ folder into extensions/ needs no extra copies.
-  // The getAgentDir() mirror path covers legacy flat-layout installs.
-  const candidates = [
-    join(HERE, "prompts", "run.md"),
-    join(getAgentDir(), "prompts", "run.md"),
-  ];
-  const src = candidates.find((p) => existsSync(p));
-  if (!src) return DEFAULT_PROTOCOL;
-  try {
-    const raw = readFileSync(src, "utf8");
-    // Strip YAML frontmatter (it is for /run-as-template autocomplete, not the LLM).
-    if (raw.startsWith("---")) {
-      const end = raw.indexOf("\n---", 3);
-      if (end !== -1) return raw.slice(end + 4).trimStart();
-    }
-    return raw;
-  } catch {
-    return DEFAULT_PROTOCOL;
-  }
-}
-
-/**
- * Append a runtime skill-card as operating discipline to the protocol. The card
- * gives the model the compact process rules (~300 tok) instead of the full skill
- * (~5000 tok). The harness protocol always governs on conflict. Disable via
- * `skillCard: null` in harness.json. Cards ship inside the extension dir
- * (self-contained); the getAgentDir() mirror path covers legacy flat installs.
- * The verifier card at review-entry/resume is tier-gated (P3-T2): quick-tier
- * runs skip it; standard/full runs get it.
- */
-/** Resolve the active operating-discipline card name(s) for a stage (primary +
- *  layered lens). Single source of truth for both prompt injection and the
- *  user-facing notify. An explicit `skillCard` config always wins and suppresses
- *  layering; otherwise the stage's mapped card (or the builder default) is used. */
-function activeCardNames(cfg: Record<string, unknown>, stage?: string): string[] {
-  const explicit = cfg.skillCard as string | null | undefined;
-  const stageCard = stage ? stageSkillCard(stage) : null;
-  const name = explicit ?? stageCard ?? DEFAULT_CONFIG.skillCard;
-  const names: string[] = [];
-  if (name) names.push(String(name));
-  if (!explicit && stage) {
-    const layer = stageLayerCard(stage);
-    if (layer && layer !== name) names.push(layer);
-  }
-  return names;
-}
-
-function skillCardNote(cfg: Record<string, unknown>, stage?: string, stats?: { skillCardTokens?: number }): string {
-  const load = (n: string) =>
-    loadSkillCard(join(HERE, "core", "skillcards"), n) ||
-    loadSkillCard(join(getAgentDir(), "extensions", "core", "skillcards"), n);
-  const blocks: string[] = [];
-  let tokens = 0;
-  for (const n of activeCardNames(cfg, stage)) {
-    const c = load(n);
-    if (c) {
-      blocks.push(`## Operating discipline (skill card: ${n})\n${c}`);
-      tokens += estimateTokens(c);
-    }
-  }
-  if (!blocks.length) return "";
-  // Idea #1 telemetry: count the injected card(s)' tokens (advisory — the report
-  // shows how much context the operating-discipline cards cost per run).
-  if (stats) stats.skillCardTokens = (stats.skillCardTokens ?? 0) + tokens;
-  return `\n\n${blocks.join("\n\n")}\nThe harness protocol above governs — if a card rule conflicts with it, the harness protocol wins.`;
-}
-
-const DEFAULT_PROTOCOL = `# Harness run — efficient task execution
-
-You are executing a task under the harness. Discipline is enforced by code: the
-gate runs the verify command after every edit, and edits outside your declared
-scope are blocked. Your job is judgment and precision.
-
-> NOTE: prompts/run.md is missing — this is the fallback protocol; the full
-> marker/pipeline harness (Thinking/Lane/Persona markers, planning gates,
-> snapshot, telemetry) is unavailable. Proceed as a plain task: restate,
-> make minimal changes, verify with the project's own checks, report what
-> changed.
-
-## Task
-{{TASK}}
-
-## Snapshot
-{{SNAPSHOT}}
-
-## Protocol
-1. Restate the task in one line. If ambiguous, ask ONE clarifying question — then proceed.
-2. Call harness_declare with ONLY the files the task requires (relative paths), before your first edit. Edits are blocked until you declare — do not declare memory/, docs/, or unrelated files.
-3. Read only what you need: prefer grep and targeted read (offset/limit) over whole-file reads. Keep the prompt prefix stable — don't re-print already-shown context — to maximize cache hits and cut cost.
-4. Make edits in small batches. After each edit the GATE result is appended to the tool result — watch it. Verify command: {{VERIFY}}
-5. GATE FAIL: read the exact error, form ONE hypothesis, make ONE fix. Never stack fixes. After {{MAXFAILS}} consecutive fails the harness raises thinking; at {{MAXTURNS}} turns the run is stopped.
-6. Baseline was {{BASELINE}} before you started — {{BASELINE_NOTE}}
-7. Done = GATE passes + you reviewed the complete diff of your changes once + acceptance is met. Write a short summary: what changed, files touched, gate result. Prefer ending it with 'Commit: <one-line what-changed>' — the auto-commit uses that line as its subject (otherwise it falls back to your summary's first line). If you CANNOT finish within the remaining budget, end your summary with a line exactly like \"Remaining: N turns\" so the harness can tell the user how much more is needed. The harness reports cost stats after you finish.`;
 
 export default function harness(pi: ExtensionAPI) {
   if (staleCore) {
@@ -1863,3 +1519,4 @@ function editCoachForEvent(
     writeRun(run);
   });
 }
+
