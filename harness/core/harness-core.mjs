@@ -5,295 +5,52 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { DEFAULT_CONFIG } from "./constants.mjs";
+import { LONGTERM_DIR } from "./constants.mjs";
+import { TEMP_DIR } from "./constants.mjs";
+import { THINK_LEVELS } from "./constants.mjs";
+import { USE_COLOR } from "./constants.mjs";
+import { color } from "./constants.mjs";
+import { isIgnored } from "./safety.mjs";
+import { normalizeRel } from "./safety.mjs";
+import { shq } from "./safety.mjs";
 
-export const CORE_VERSION = "1.13.1";
-
-export const DEFAULT_CONFIG = {
-  verifyCmd: null, // override; auto-detected from package.json scripts otherwise
-  timeoutMs: 60_000,
-  maxTurns: 50,
-  maxConsecutiveFails: 2,
-  deEscalateAfter: 3, // green gates before thinking drops back to thinkingStart
-  absMaxTurns: 60, // absolute wall that health-gated budget extension can never exceed
-  softBudgetPct: 0.65, // fraction of maxTurns where the harness asks the model for its remaining-work estimate
-  maxExtensions: 2, // max auto-extensions per run — bounds a green-but-stuck loop
-  autoCommit: true, // auto-commit scoped changes after a successful run
-  // Task-targeted acceptance probe (v1.13): run once at review entry when the
-  // model claims the task is done (Acceptance: met|partial). Lazy — never at
-  // start — and only when the run's acceptance verdict invites verification.
-  acceptCmd: null, // e.g. "npm run verify:accept" — the acceptance command
-  // Optional review lens (v1.13): raise thinking for the review stage only, so
-  // the diff audit doesn't run at the editing floor. null = keep current level.
-  reviewThinking: null, // e.g. "medium" — applied in harness_review
-  // Name of a runtime skill-card (skillcards/<name>.md) to append to the protocol
-  // as operating discipline. Set to null/false to disable. The harness protocol
-  // always governs on conflict.
-  skillCard: "builder",
-  // Tool-output token budget (idea #4): bash tool results larger than this are
-  // summarized (head + tail + error lines) before re-injection into context; the
-  // full output is archived under .harness/temp/. pi's own bash tool already
-  // tail-truncates at 2000 lines/50KB (~12.5K tokens) — this tightens the
-  // re-injected result to a token budget. null/0 disables.
-  toolOutputTokens: 3000,
-  // Cross-run gate cache (gap #2): reuse a last-green gate verdict when the git
-  // state (HEAD + working-tree porcelain set) exactly matches a prior green run.
-  cacheGreenGates: true,
-  // Selective tests (gap #1): narrow the edit-gate to tests affected by the
-  // changed files when the verify command is a recognized runner. Full suite
-  // always runs at review. Opt-in — false keeps today's behavior.
-  selectiveTests: false,
-  // Skip-gate on pure-doc/whitespace edits (gap #8): only changed doc files
-  // (.md/.txt/images) → the edit-gate is skipped; review still runs full.
-  skipDocGate: true,
-  // Warn→confirm tiers (gap #9): harness.json → dangerTiers: {"<pattern>":
-  // "block"|"confirm"|"allow"}. Default block keeps today's behavior.
-  dangerTiers: {},
-  // Monorepo per-package gates (gap #10): when all changed files resolve to one
-  // nested package, gate that package's verify instead of the root suite.
-  perPackageGate: false,
-  // Last-green rollback point (gap #3): on a red gate, record the failing head
-  // and coach the newest cached green as a rollback point (`/harness-fork-green`
-  // shows it). Off by default — today's behavior stays when unset/false.
-  autoFork: false,
-  thinkingStart: "low",
-  thinkingEscalated: "high",
-  strict: true,
-  ignore: [
-    "node_modules",
-    ".git",
-    ".harness",
-    ".pi",
-    "dist",
-    "build",
-    "coverage",
-    ".next",
-    ".cache",
-    ".venv",
-    "venv",
-    "__pycache__",
-    "target",
-    "vendor",
-    "bin",
-    "obj",
-    ".gradle",
-    ".tox",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".idea",
-    // secrets / generated — keep credential filenames out of the snapshot context
-    "auth.json",
-    "credentials.json",
-    ".env",
-    ".env.*",
-    ".ssh",
-    "*.pem",
-    "*.key",
-    "*.p12",
-    "*.local",
-  ],
-};
-
-/**
- * Token-aware dangerous-command matcher. Returns the matched pattern (truthy) or
- * null (safe). Unlike a substring match, `rm -rf /tmp` and `rm -rf ~/build` are
- * allowed while the catastrophic `rm -rf /`, `rm -rf ~`, and `sudo rm -rf /` are
- * blocked: leading wrappers (sudo/env/cd/time) are peeled, then the rm target is
- * compared exactly against `/`, `~`, or `$HOME`. Quoted targets are unquoted.
- */
-export function dangerousBash(cmd) {
-  const c = String(cmd ?? "").trim();
-  if (!c) return null;
-  let s = c;
-  s = s.replace(/^(sudo\s+|time\s+)+/, "");
-  s = s.replace(/^env\s+[\w=]+\s+/, "");
-  s = s.replace(/^cd\s+[^;&|]+\s*(?:&&|\|\||[;&|])\s*/, "");
-  s = s.trim();
-  const toks = s.split(/[;&|]|\s+/).filter(Boolean);
-  const head = toks[0] ?? "";
-  if (head === "rm") {
-    // Parse rm flags (short -r/-f, long --recursive/--force) and the target,
-    // honoring a `--` end-of-options separator. Catastrophic only when recursive
-    // AND force AND the target is exactly /, ~, or $HOME — safe subdirs pass.
-    let recursive = false;
-    let force = false;
-    let target = null;
-    let afterSep = false;
-    for (let i = 1; i < toks.length; i++) {
-      const t = toks[i];
-      if (afterSep) {
-        target = t;
-        break;
-      }
-      if (t === "--") {
-        afterSep = true;
-        continue;
-      }
-      if (t.startsWith("--")) {
-        if (t.includes("recursive")) recursive = true;
-        if (t.includes("force")) force = true;
-        continue;
-      }
-      if (t.startsWith("-") && t.length > 1) {
-        if (t.includes("r")) recursive = true;
-        if (t.includes("f")) force = true;
-        continue;
-      }
-      target = t;
-      break;
-    }
-    if (recursive && force && target != null) {
-      // Strip quotes AND trailing slashes so `rm -rf $HOME/` and `rm -rf ~/`
-      // cannot bypass the guard (they delete the home dir too). Keep a bare "/"
-      // intact (root) — collapsing it to "" would let `rm -rf /` escape.
-      let t0 = target.replace(/^["'`]+|["'`]+$/g, "");
-      if (t0.length > 1) t0 = t0.replace(/\/+$/, "");
-      if (t0 === "/" || t0 === "~" || t0 === "$HOME" || t0 === "$home") return "rm -rf /|~|$HOME";
-    }
-  }
-  if (c.includes("mkfs")) return "mkfs";
-  if (c.includes(":(){")) return "fork bomb";
-  if (/\s*>\s*\/dev\/sd/.test(c)) return "> /dev/sd*";
-  if (/\bdel\s+\/f\s+\/s\s+\/q\s+c:/i.test(c)) return "del /f /s /q c:";
-  if (/\brd\s+\/s\s+\/q\s+c:/i.test(c)) return "rd /s /q c:";
-  return null;
-}
-
-/**
- * Warn→confirm tiers (gap #9): map a dangerous command's matched pattern to a
- * configured tier. `dangerTiers` (harness.json) is `{ "<pattern>": "block" |
- * "confirm" | "allow" }` where pattern is exactly what `dangerousBash()` returns
- * (e.g. "rm -rf /|~|$HOME"). Default fallback is "block" — today's hard-block.
- * Returns { tier: null } when the command is safe, else { tier, pattern }.
- */
-export function dangerTier(cmd, tiers = {}, fallback = "block") {
-  const hit = dangerousBash(cmd);
-  if (!hit) return { tier: null };
-  const t = String(tiers?.[hit] ?? fallback);
-  return { tier: t === "allow" || t === "confirm" ? t : "block", pattern: hit };
-}
-
-const READONLY_CMDS = new Set([
-  "ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "echo", "pwd",
-  "which", "type", "tree", "printf", "less", "more", "sed", "awk", "sort", "uniq", "cut",
-]);
-const MUTATING_CMDS = new Set([
-  "rm", "mv", "cp", "touch", "mkdir", "rmdir", "ln", "tee", "dd",
-  "npm", "yarn", "pnpm", "npx", "bun", "pip", "pip3", "bundle", "gem",
-  "make", "cmake", "cargo", "go", "dotnet", "mvn", "mvnw", "gradle", "gradlew",
-  "python", "python3", "node", "tsc", "php", "ruby", "gcc", "g++", "javac", "git",
-]);
-const MUTATING_SUFFIX = ["install", "build", "add", "commit", "apply", "reset", "checkout", "stash", "rebase", "merge", "deploy", "generate", "bundle"];
-
-/**
- * Conservative heuristic: does a bash command plausibly write to the project?
- * Used to decide whether to run the verify gate after a bash tool result.
- * Read-only commands are skipped; redirects, installs, builds and VCS
- * mutations trigger a gate so a command-line fix is verified mid-run.
- */
-export function bashMutates(cmd) {
-  const c = String(cmd ?? "");
-  if (!c.trim()) return false;
-  if (/\s*>\s*[^\s]|\s*>>\s*/.test(c)) return true; // output redirect to a file
-  const peeled = c.trim().replace(/^(cd [^;|&]+[;|&]?\s*|env\s+[\w=]+\s+|\btime\s+)/, "");
-  const toks = peeled.split(/[;|&]+|\s+/).filter(Boolean);
-  const head = toks[0] ?? "";
-  // In-place edits write files even though the tool is normally read-only.
-  if (head === "sed" && /(^|\s)-i(\.[A-Za-z0-9]+)?($|\s)/.test(peeled)) return true;
-  if (head === "awk" && /-i\s+inplace/.test(peeled)) return true;
-  if (READONLY_CMDS.has(head)) return false;
-  if (head === "git") {
-    const sub = toks[1] ?? "";
-    return !["status", "log", "diff", "show", "branch", "remote", "config", "ls-files", "rev-parse"].includes(sub);
-  }
-  // Tool-specific read-only flags (e.g. node --check, php -l) are not mutations
-  // and shouldn't trigger a redundant gate.
-  const READONLY_TOOL_FLAGS = {
-    node: ["--version", "--check", "--help"],
-    tsc: ["--noEmit", "--version", "--help"],
-    php: ["-l", "--version", "--help"],
-    ruby: ["-c", "--version", "--help"],
-  };
-  if (READONLY_TOOL_FLAGS[head]?.some((f) => peeled.includes(f))) return false;
-  if (MUTATING_CMDS.has(head)) return true;
-  return toks.some((t) => MUTATING_SUFFIX.some((s) => t.endsWith(s)));
-}
-
-// Skip-gate classifier (gap #8): a change is "doc-only" when every changed file
-// is a documentation/text/image surface (or the diff is empty). Pure-doc edits
-// skip the per-edit gate (the review/full gate still runs). Markdown, plain
-// text, RST/AsciiDoc, and image assets are safe; config/data files that affect
-// the build (package.json, tsconfig, .json, .yaml) are NOT exempt.
-const DOC_SURFACE_RE = /\.(md|mdx|txt|rst|adoc|svg|png|jpe?g|gif|webp|ico)$/i;
-export function editRequiresGate(changedFiles) {
-  const changed = (Array.isArray(changedFiles) ? changedFiles : []).map(String).filter(Boolean);
-  if (!changed.length) return false;
-  return changed.some((f) => !DOC_SURFACE_RE.test(f));
-}
-
-export function normalizeRel(p, cwd) {
-  try {
-    return relative(resolve(cwd), resolve(p)).split(sep).join("/");
-  } catch {
-    return String(p);
-  }
-}
-
-/** Quote a path for safe shell embedding (escapes backslash + double-quote). */
-export function shq(p) {
-  return `"${String(p).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-export function insideProject(p, cwd) {
-  const r = resolve(cwd);
-  const t = resolve(p);
-  return t === r || t.startsWith(r + sep);
-}
-
-/**
- * Convert a glob pattern to a RegExp. Both `*` and `**` match any characters
- * including `/`, so a pattern matches across path segments:
- *  - `*.pem`   → `key.pem`, `src/key.pem`
- *  - `.env.*`  → `.env.prod`, `.env.sub.prod`
- *  - `src/**`  → `src`, `src/a/b.ts`
- * (Treating `*` as multi-segment is deliberate: these are ignore patterns,
- * and over-matching is safer than under-matching for ignore/scope checks.)
- */
-export function globToRegExp(glob) {
-  let re = String(glob).replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-  re = re.replace(/\*\*/g, ".*");
-  re = re.replace(/\*/g, ".*");
-  return new RegExp("^" + re + "$");
-}
-
-export function isIgnored(rel, ignore) {
-  const parts = rel.split("/");
-  const base = parts[parts.length - 1] ?? rel;
-  return ignore.some((ig) => {
-    const i = String(ig).replace(/\/+$/, "");
-    if (!i) return false;
-    // exact segment / prefix match
-    if (parts.includes(i) || rel === i || rel.startsWith(i + "/")) return true;
-    // glob support: `*`/`**` match across segments (e.g. *.pem, .env.*,
-    // src/**, **/*.test.ts). Test against both the full relative path and the
-    // basename so `*.pem` catches `src/key.pem` via the full path, while the
-    // basename test also catches patterns that only name a file at any depth.
-    if (i.includes("*")) {
-      const re = globToRegExp(i);
-      if (re.test(rel) || re.test(base)) return true;
-    }
-    return false;
-  });
-}
-
-export function scopeAllowed(rel, declared, strict) {
-  if (!strict || !Array.isArray(declared) || declared.length === 0) return true;
-  return declared.includes(rel);
-}
-
-/** Strict scope requires an explicit harness_declare before any edit. */
-export function declareRequired(declared, strict) {
-  return strict && (!Array.isArray(declared) || declared.length === 0);
-}
+// ---- barrel re-exports (Batch 1): moved-out modules -----------------------
+export { ACCEPT_VERDICTS } from "./constants.mjs";
+export { AI_CAP } from "./constants.mjs";
+export { CORE_VERSION } from "./constants.mjs";
+export { DEFAULT_CONFIG } from "./constants.mjs";
+export { LANES } from "./constants.mjs";
+export { LONGTERM_DIR } from "./constants.mjs";
+export { PERSONA_TAXONOMY } from "./constants.mjs";
+export { PHASE_TAXONOMY } from "./constants.mjs";
+export { TEMP_DIR } from "./constants.mjs";
+export { THINK_LEVELS } from "./constants.mjs";
+export { USE_COLOR } from "./constants.mjs";
+export { bashMutates } from "./safety.mjs";
+export { color } from "./constants.mjs";
+export { dangerTier } from "./safety.mjs";
+export { dangerousBash } from "./safety.mjs";
+export { declareRequired } from "./safety.mjs";
+export { editRequiresGate } from "./safety.mjs";
+export { globToRegExp } from "./safety.mjs";
+export { insideProject } from "./safety.mjs";
+export { isIgnored } from "./safety.mjs";
+export { normalizeRel } from "./safety.mjs";
+export { parseAcceptance } from "./parse.mjs";
+export { parseCandidates } from "./parse.mjs";
+export { parseCommitSubject } from "./parse.mjs";
+export { parseLanePrediction } from "./parse.mjs";
+export { parsePersona } from "./parse.mjs";
+export { parsePhasePrediction } from "./parse.mjs";
+export { parsePlan } from "./parse.mjs";
+export { parsePlanProgress } from "./parse.mjs";
+export { parseRemainingEstimate } from "./parse.mjs";
+export { parseRunArgs } from "./parse.mjs";
+export { parseThinkingPrediction } from "./parse.mjs";
+export { scopeAllowed } from "./safety.mjs";
+export { shq } from "./safety.mjs";
+export { stripAcceptanceBlocks } from "./parse.mjs";
 
 export const SCRIPT_NAMES = ["test", "typecheck", "types", "check", "lint", "verify", "ci"];
 
@@ -351,59 +108,6 @@ export function findProjectJsFiles(cwd, max = 40) {
   return findFilesByExt(cwd, [".js", ".mjs", ".cjs"], max);
 }
 
-/** Parse a model-stated remaining-work estimate: "Remaining: 5 turns" → 5. */
-export function parseRemainingEstimate(text) {
-  if (!text) return null;
-  const m = String(text).match(/remaining\s*[:=]?\s*(\d+)\s*(turns?|steps?|calls?)?/i);
-  return m ? Math.max(0, parseInt(m[1], 10)) : null;
-}
-
-// Strip markdown noise from a candidate commit subject: bold markers, bullets,
-// backticks/hashes, and whitespace runs. Returns a single-line string or null.
-function sanitizeCommitSubject(s) {
-  let t = String(s)
-    .replace(/\s*\*\*\s*/g, "") // ** bold markers
-    .replace(/^[ \t]*[-*•]\s*/, "") // leading bullets
-    .replace(/[`#]+/g, "") // backticks / heading hashes
-    .replace(/\s+/g, " ") // collapse newlines/whitespace to one space
-    .replace(/\s+-\s*$/, "") // trailing " -"
-    .trim();
-  if (!t) return null;
-  return t.length > 72 ? t.slice(0, 69).trimEnd() + "…" : t;
-}
-
-/**
- * Derive a quality commit subject from the model's final message:
- *   1. an explicit `Commit: <one-line>` marker line, else
- *   2. the first useful line of its `## Summary` section (or the whole text
- *      when there is no header), skipping Task:/Remaining:/VERDICT lines.
- * Returns null when nothing usable (callers fall back to goal/task).
- */
-export function parseCommitSubject(text) {
-  const src = String(text ?? "");
-  if (!src.trim()) return null;
-  const marker = src.match(/^[ \t]*Commit\s*:\s*(.+)$/im);
-  if (marker && marker[1].trim()) return sanitizeCommitSubject(marker[1]);
-  const sec = src.match(/^#{1,3}\s*Summary\s*$/im);
-  const body = sec ? src.slice(sec.index + sec[0].length) : src;
-  const skip = /^(?:\*\*)?(?:Task|Summary|Remaining|VERDICT)\s*[:：]/i;
-  for (const raw of body.split("\n")) {
-    const line = raw.trim();
-    if (!line || skip.test(line)) continue;
-    const clean = sanitizeCommitSubject(line);
-    if (clean) return clean;
-  }
-  return null;
-}
-
-// Valid thinking levels, ordered lowest → highest. Used for flag parsing and
-// for capping AI self-assigned levels.
-export const THINK_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-// AI (model self-assessment) may never exceed this level. xhigh/max are
-// expensive and reserved for manual --think/--edit overrides only.
-export const AI_CAP = "high";
-
 /**
  * Resolve phase thinking levels, decoupled from task lane (P1 decouple): a
  * task complexity lane must never raise per-turn thinking cost — the reactive
@@ -419,213 +123,12 @@ export function phaseThinking({ forcedThink = null, forcedEdit = null, aiPredict
 }
 
 /**
- * Parse /run args into --think/--edit flags and the remaining task text.
- * Each flag consumes its own value token; the rest (quotes preserved as tokens)
- * is re-joined as the task. Malformed flags are ignored (their tokens dropped).
- * Returns { flags: { think, edit }, task }.
- */
-export function parseRunArgs(args) {
-  const flags = { think: null, edit: null, persona: null, lane: null, budget: null, phase: null };
-  if (!args) return { flags, task: "" };
-  const tokens = String(args).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-  const rest = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t === "--phase") {
-      const val = tokens[i + 1];
-      if (val && !val.startsWith("--") && PHASE_TAXONOMY.includes(val.toLowerCase())) {
-        flags.phase = val.toLowerCase();
-        i++; // consume the value token
-      }
-      // else: missing/invalid value → drop the flag token, keep the rest
-      continue;
-    }
-    if (t === "--budget") {
-      // Numeric cost ceiling (dollars) for the soft-warning; NaN/<=0 dropped.
-      const val = tokens[i + 1];
-      const num = val && !val.startsWith("--") ? Number(val) : NaN;
-      if (Number.isFinite(num) && num > 0) {
-        flags.budget = num;
-        i++; // consume the value token
-      }
-      // else: missing/invalid value → drop the flag token, keep the rest
-      continue;
-    }
-    if (t === "--think" || t === "--edit" || t === "--persona" || t === "--lane") {
-      const key = t === "--persona" ? "persona" : t === "--think" ? "think" : t === "--edit" ? "edit" : "lane";
-      const val = tokens[i + 1];
-      const valid =
-        key === "persona"
-          ? val && !val.startsWith("--") && PERSONA_TAXONOMY.includes(val)
-          : key === "lane"
-            ? val && !val.startsWith("--") && LANES.includes(val.toUpperCase())
-            : val && !val.startsWith("--") && THINK_LEVELS.includes(val);
-      if (valid) {
-        flags[key] = key === "lane" ? val.toUpperCase() : val;
-        i++; // consume the value token
-      }
-      // else: missing/invalid value → drop the flag token, keep the rest
-      continue;
-    }
-    rest.push(stripOuterQuotes(t));
-  }
-  return { flags, task: rest.join(" ") };
-}
-
-/** Remove a pair of matching surrounding quotes from a token, if present. */
-function stripOuterQuotes(t) {
-  if (t.length >= 2) {
-    const first = t[0];
-    if ((first === '"' || first === "'") && t[t.length - 1] === first) return t.slice(1, -1);
-  }
-  return t;
-}
-
-/**
- * Parse a "Thinking: <level>" prediction from the model's first message.
- * Returns a validated, AI-capped level, or null if absent/invalid. Mirrors
- * parseRemainingEstimate's marker pattern so the harness can read the model's
- * self-assessed complexity and apply it for the planning phase.
- */
-export function parseThinkingPrediction(text) {
-  if (!text) return null;
-  const m = String(text).match(/\bthinking\s*(?:level\s*)?[:=]\s*"?([a-z]+)"?/i);
-  if (!m) return null;
-  const lvl = m[1].toLowerCase();
-  const idx = THINK_LEVELS.indexOf(lvl);
-  if (idx === -1) return null;
-  const capIdx = THINK_LEVELS.indexOf(AI_CAP);
-  return idx > capIdx ? AI_CAP : lvl;
-}
-
-/**
- * Parse the structured planning artifact (revised-plan A2a): a `Goal:` line, a
- * `Plan:` body, and a priority Tasks List whose items may carry a `footprint:`
- * risk tag. Returns { goal, plan, tasks: [{ text, footprint }], risky } where
- * risky = any task tagged `footprint: boundary` or a `## Risk Notes` section.
- * All fields best-effort: absent parts default to empty/false.
- */
-// Acceptance closure (v1.13): the model states its acceptance criteria during
-// planning (`## Acceptance` + `- [x]/- [ ]` lines) and ends the run with an
-// evidence-based verdict line `Acceptance: met|partial|unmet`. The harness
-// reports it and blocks auto-commit on `unmet`. Parsed, not trusted.
-export const ACCEPT_VERDICTS = ["met", "partial", "unmet"];
-
-/**
- * Remove `## Acceptance` sections from a message BEFORE task-list parsing, so
- * acceptance-criteria checkboxes never leak into the plan tasklist or the
- * plan-progress counts (which scan all `- [x]` lines globally). Stops at the
- * next `##` heading; repeated for every block in the message.
- */
-export function stripAcceptanceBlocks(text) {
-  let src = String(text ?? "");
-  const re = /##\s*Acceptance(?:\s+criteria)?/gi;
-  let m;
-  while ((m = re.exec(src))) {
-    const rest = src.slice(m.index + m[0].length);
-    const end = rest.search(/\n(?=##)/); // newline before the next heading
-    const blockEnd = end === -1 ? src.length : m.index + m[0].length + end;
-    src = src.slice(0, m.index) + src.slice(blockEnd);
-    re.lastIndex = 0; // restart the scan on the modified string
-  }
-  return src;
-}
-
-/**
- * Parse the model's acceptance statement from a message. Returns
- * { verdict, criteria } where verdict is the last `Acceptance: met|partial|
- * |unmet` line (null when absent) and criteria are the `- [x]/- [ ]` items
- * under a `## Acceptance` heading. Best-effort: no markers → empty defaults.
- */
-export function parseAcceptance(text) {
-  const src = String(text ?? "");
-  const criteria = [];
-  const h = src.match(/##\s*Acceptance(?:\s+criteria)?/i);
-  if (h) {
-    const rest = src.slice(h.index + h[0].length);
-    const end = rest.search(/\n##(?!#)/);
-    const block = (end === -1 ? rest : rest.slice(0, end)).trim();
-    const re = /^[ \t]*[-*]\s*\[([ xX])\]\s+(.+)$/gm;
-    let m;
-    while ((m = re.exec(block))) criteria.push({ text: m[2].trim(), done: m[1].toLowerCase() === "x" });
-  }
-  const vm = src.match(/(?:^|\s)Acceptance\s*:\s*(met|partial|unmet)\b/im);
-  return { verdict: vm ? vm[1].toLowerCase() : null, criteria };
-}
-
-export function parsePlan(text) {
-  const src = stripAcceptanceBlocks(text);
-  const goal = (src.match(/^\s*Goal\s*:\s*(.+)$/im)?.[1] ?? "").trim();
-  // Plan body: text between a `## Plan` / `Plan:` header and the tasks list.
-  let plan = "";
-  {
-    const pm = src.match(/^\s*(?:##\s*)?Plan\s*:\s*([\s\S]*?)(?=^\s*(?:##|[-*]\s*\[)|$)/im);
-    if (pm && pm[1]) plan = pm[1].trim();
-  }
-  const tasks = [];
-  const re = /^[ \t]*[-*]\s*\[[ xX]\]\s+(.+)$/gm;
-  let m;
-  while ((m = re.exec(src))) {
-    const raw = m[1].trim();
-    // footprint tag may be bare (`footprint: boundary`) or parenthesized
-    // (`(footprint: boundary)`) after the task text.
-    const fm = raw.match(/(?:^|\s)(?:\(|\[)?footprint\s*:\s*(none|small|boundary)(?:\)|\])?/i);
-    tasks.push({
-      text: fm ? raw.slice(0, fm.index).trim() : raw,
-      footprint: fm ? fm[1].toLowerCase() : "none",
-    });
-  }
-  const risky = tasks.some((t) => t.footprint === "boundary") || /##\s*Risk Notes/i.test(src);
-  return { goal, plan, tasks, risky };
-}
-
-/**
  * True when a planning-phase tasklist should be produced/captured — i.e. the
  * effective planning thinking level is non-trivial (>= medium). Trivial (low)
  * runs skip the tasklist entirely so cheap tasks cost nothing extra.
  */
 export function tasklistEnabled(level) {
   return THINK_LEVELS.indexOf(String(level ?? "").toLowerCase()) >= THINK_LEVELS.indexOf("medium");
-}
-
-// Valid persona domain focuses. The stage ROLE (Product Owner / Senior Developer
-// / Reviewer) is stage-fixed; this domain adapts per task (auto or --persona).
-export const PERSONA_TAXONOMY = ["generalist", "security", "performance", "api", "refactor", "test-first"];
-
-// Task complexity lanes (harness-design Phase 0). Gate 2 is conditional on
-// lane: L (boundary/risk) runs the plan-review gate. Lane is ADVISORY — it
-// never sets thinking levels (P1 decouple); the fail-ladder is the only edit
-// escalator.
-export const LANES = ["S", "M", "L"];
-
-// Run phases (ideation feature). "implement" = the default pipeline
-// (brainstorm-less). "ideate" = a divergent idea-generation phase that runs
-// before filtering (Gate 1) and planning. Set via --phase flag or the model's
-// `Phase: ideate|implement` marker (mirrors the Lane/Thinking markers).
-export const PHASE_TAXONOMY = ["ideate", "implement"];
-
-/**
- * Parse a "Phase: <ideate|implement>" prediction from the model's first message.
- * Validated against PHASE_TAXONOMY; returns null if absent/invalid. Precedence:
- * --phase flag > this prediction > "implement". Honored only pre-declare.
- */
-export function parsePhasePrediction(text) {
-  const m = String(text ?? "").match(/Phase:\s*(ideate|implement)\b/i);
-  if (!m) return null;
-  const phase = m[1].toLowerCase();
-  return PHASE_TAXONOMY.includes(phase) ? phase : null;
-}
-
-/**
- * Parse a "Lane: <S|M|L>" prediction from the model's first message (the
- * triage marker). Validated against LANES; returns null if absent/invalid.
- * Precedence: --lane flag > this prediction > classifyLane() heuristic.
- */
-export function parseLanePrediction(text) {
-  const m = String(text ?? "").match(/Lane:\s*([SML])\b/i);
-  if (!m) return null;
-  const lane = m[1].toUpperCase();
-  return LANES.includes(lane) ? lane : null;
 }
 
 /**
@@ -645,43 +148,6 @@ export function gate2Required(lane, plan) {
  */
 export function gate1Required(phase, plan) {
   return phase === "ideate" && !!(plan && plan.candidates && plan.candidates.length);
-}
-
-/**
- * Parse a `## Candidate Requirements` block (the brainstormer's deliverable)
- * into a ranked list of candidate strings. Extracts the numbered/bulleted items
- * under the heading, stopping at the next `##` heading. Best-effort: no block
- * → empty array.
- */
-export function parseCandidates(text) {
-  const s = String(text ?? "");
-  const m = s.match(/##\s*Candidate Requirements/i);
-  if (!m) return [];
-  const body = s.slice(m.index + m[0].length);
-  const end = body.search(/^##(?!#)/m);
-  const block = (end === -1 ? body : body.slice(0, end)).trim();
-  if (!block) return [];
-  return block
-    .split(/\n(?=(?:\d+[\.\)]\s|[-*]\s))/)
-    .map((l) => l.replace(/^\s*(?:\d+[\.\)]\s|[-*]\s)/, "").trim())
-    .filter(Boolean);
-}
-
-/**
- * Compute plan-execution progress (revised-plan A4) from a message's checkbox
- * ticks (`- [x]` done vs `- [ ]` open). Returns { done, total, remaining,
- * current } where current = the first open task's text (the task Build should
- * be on), or null when none/complete. Best-effort: no checkboxes → zeros.
- */
-export function parsePlanProgress(text) {
-  const src = stripAcceptanceBlocks(String(text ?? ""));
-  const items = [];
-  const re = /^[ \t]*[-*]\s*\[([ xX])\]\s+(.+)$/gm;
-  let m;
-  while ((m = re.exec(src))) items.push({ done: m[1].toLowerCase() === "x", text: m[2].trim() });
-  const done = items.filter((i) => i.done).length;
-  const current = items.find((i) => !i.done)?.text ?? null;
-  return { done, total: items.length, remaining: items.length - done, current };
 }
 
 // Stage → skill-card mapping (revised-plan A7). The injected operating-discipline
@@ -759,19 +225,6 @@ export function classifyLane(task, snapshot = "") {
   if (L_RE.test(text)) return "L";
   if (S_RE.test(text)) return "S";
   return "M";
-}
-
-/**
- * Parse a "Persona: <domain>" marker from the model's first message. Returns a
- * validated taxonomy entry, or null if absent/invalid (caller falls back to
- * generalist). Mirrors parseThinkingPrediction.
- */
-export function parsePersona(text) {
-  if (!text) return null;
-  const m = String(text).match(/\bpersona\s*[:=]\s*"?([a-z-]+)"?/i);
-  if (!m) return null;
-  const name = m[1].toLowerCase();
-  return PERSONA_TAXONOMY.includes(name) ? name : null;
 }
 
 /**
@@ -1197,13 +650,6 @@ export function appendRunStats(cwd, run) {
 
 const PYCACHE_DIR = ".harness/pycache";
 const RUN_TMP_FILE = ".harness/run.json.tmp";
-
-// Agent-facing artifact dirs (revised review: reuse the gitignored .harness/
-// instead of a new top-level /harness folder). Enforcement is BY DIRECTORY,
-// not by model judgment: anything the agent writes under TEMP_DIR is cleared at
-// task end; LONGTERM_DIR is preserved and referenceable across runs.
-export const TEMP_DIR = ".harness/temp";
-export const LONGTERM_DIR = ".harness/longterm";
 
 /** Ensure the agent-facing artifact dirs exist (called at run start). */
 export function ensureArtifactDirs(cwd) {
@@ -2343,16 +1789,6 @@ export function reportRows(run) {
   return rows;
 }
 
-/** ANSI color helpers — applied only when stdout is a TTY and NO_COLOR is unset (TUI-safe). */
-export const USE_COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR;
-const ansi = (code) => (s) => (USE_COLOR ? `\x1b[${code}m${s}\x1b[0m` : s);
-export const color = {
-  green: ansi(32),
-  red: ansi(31),
-  yellow: ansi(33),
-  bold: ansi(1),
-};
-
 /** Compact one-line summary shown above the report table (scannable TL;DR). */
 export function buildTldr(run) {
   const st = run.stats ?? {};
@@ -2451,3 +1887,4 @@ export function renderTable(rows, opts = {}) {
   out.push(hline("+"));
   return out.join("\n");
 }
+
