@@ -1,6 +1,6 @@
 // report.ts — extracted from harness/index.ts (Batch 5 of REFACTOR-PLAN.md).
 // Pure helpers — identical to the original source.
-import { buildTldr, color, renderTable, reportRows, tail } from "./core/harness-core.mjs";
+import { buildTldr, color, renderTable, reportRows, tail } from "../core/harness-core.mjs";
 import type { RunState } from "./index-consts.ts";
 /** Print the HARNESS REPORT table + gate notes. */
 export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string, level?: string) => void } }) {

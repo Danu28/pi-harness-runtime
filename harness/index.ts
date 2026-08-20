@@ -105,13 +105,13 @@ import {
   nearestPackageDir,
 } from "./core/harness-core.mjs";
 
-import type { ThinkingLevel, RunState } from "./index-consts.ts";
-import { HERE, EXPECTED_CORE_VERSION, staleCore, RUN_DIR, RUN_FILE, LAST_RUN_FILE, SETTLE_CAP_MS } from "./index-consts.ts";
-import { contentText, lastAssistantText } from "./settle.ts";
-import { printReport } from "./report.ts";
-import { planLevel, editLevel, startThinking, tierMeaning } from "./thinking.ts";
-import { loadHarnessConfig, readProtocol } from "./protocol.ts";
-import { activeCardNames, skillCardNote } from "./cards.ts";
+import type { ThinkingLevel, RunState } from "./entry/index-consts.ts";
+import { HERE, EXPECTED_CORE_VERSION, staleCore, RUN_DIR, RUN_FILE, LAST_RUN_FILE, SETTLE_CAP_MS } from "./entry/index-consts.ts";
+import { contentText, lastAssistantText } from "./entry/settle.ts";
+import { printReport } from "./entry/report.ts";
+import { planLevel, editLevel, startThinking, tierMeaning } from "./entry/thinking.ts";
+import { loadHarnessConfig, readProtocol } from "./entry/protocol.ts";
+import { activeCardNames, skillCardNote } from "./entry/cards.ts";
 
 
 let activeRun: RunState | null = null;

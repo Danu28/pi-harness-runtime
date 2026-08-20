@@ -27,6 +27,7 @@
   "include": [
     "harness/index.ts",
     "harness/*.ts",
-    "harness/core/*.mjs"
+    "harness/core/*.mjs",
+    "harness/entry/*.ts"
   ]
 }

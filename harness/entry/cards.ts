@@ -1,7 +1,7 @@
 // cards.ts — extracted from harness/index.ts (Batch 5 of REFACTOR-PLAN.md).
 // Pure helpers — identical to the original source.
 import { join } from "node:path";
-import { DEFAULT_CONFIG, estimateTokens, loadSkillCard, stageLayerCard, stageSkillCard } from "./core/harness-core.mjs";
+import { DEFAULT_CONFIG, estimateTokens, loadSkillCard, stageLayerCard, stageSkillCard } from "../core/harness-core.mjs";
 import { HERE } from "./index-consts.ts";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 /**

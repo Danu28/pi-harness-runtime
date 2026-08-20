@@ -2,7 +2,7 @@
 // (Batch 5 of REFACTOR-PLAN.md). Single source for live ESM bindings.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CORE_VERSION, autoCommit, verifyTier } from "./core/harness-core.mjs";
+import { CORE_VERSION, autoCommit, verifyTier } from "../core/harness-core.mjs";
 
 // Self-contained anchor: this extension's own directory, wherever pi loaded it
 // from (~/.pi/agent/extensions/harness/ as a subdir copy, or extensions/ flat).

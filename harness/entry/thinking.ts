@@ -1,6 +1,6 @@
 // thinking.ts — extracted from harness/index.ts (Batch 5 of REFACTOR-PLAN.md).
 // Pure helpers — identical to the original source.
-import { phaseThinking } from "./core/harness-core.mjs";
+import { phaseThinking } from "../core/harness-core.mjs";
 import type { RunState, ThinkingLevel } from "./index-consts.ts";
 // Thinking-level policy. The planning phase (before the model declares its edit
 // scope) runs at planLevel; once scope is declared, editing runs at editLevel.
