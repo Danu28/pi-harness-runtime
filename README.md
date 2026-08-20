@@ -12,12 +12,16 @@ Everything lives under one self-contained directory, `harness/` — the complete
 
 | File | Role |
 |------|------|
-| `harness/index.ts` | The extension: registers `/run`, `/harness-resume`, `/harness-reset`, `/harness-stats`, `/harness-clean-temp`, the `harness_declare`/`harness_review` tools, and the gate/telemetry machinery |
-| `harness/core/harness-core.mjs` | All pure logic (scoring, scope checks, budget ladder, snapshot/tldr, auto-commit) — unit-testable without pi |
-| `harness/core/skillcards/*.md` | **Runtime skill cards** — compact (~300–500 token) versions of the planner/builder/reviewer/brainstormer/verifier/shared-project-memory skills that the harness injects into the run protocol |
-| `harness/core/harness-core.test.mjs` | 58 unit tests for the core (zero deps, `node --test`) |
+| `harness/index.ts` | The extension entry: registers `/run`, `/harness-resume`, `/harness-reset`, `/harness-stats`, `/harness-clean-temp`, the `harness_declare`/`harness_review` tools, and the gate/telemetry machinery (Plans today rely on the planning/review stages + thinking ladder) |
+| `harness/core/harness-core.mjs` | **Barrel entry** to the pure logic — re-exports the full API surface from the 12 cohesion modules below (unit-testable without pi) |
+| `harness/core/{constants,safety,parse,output,detect,git,report,thinking,stages,artifacts,state}.mjs` | The pure logic split into focused cohesion modules (scope checks, budget ladder, snapshot/tldr, auto-commit, gate cache, skill-card mapping, …) |
+| `harness/core/*.test.mjs` | Per-module unit tests (111 total, zero deps, `node --test harness/core/*.test.mjs`) |
+| `harness/core/test-utils.mjs` | Shared test fixtures (`makeProject`/`rmProject`/`ALL_PROBES`/`CWD`) |
+| `harness/{index-consts,protocol,thinking,cards,settle,report}.ts` | Shared constants/types + helper logic split out of the entry |
 | `harness/core/compile-skills.mjs` | Card validator — enforces a card exists + token budget, cross-checks against full `SKILL.md` sources when a skills root is present |
 | `harness/prompts/run.md` | The `/run` protocol prompt (task/snapshot/persona markers) — read by the harness at runtime |
+
+> The historical analysis/planning docs live in [`docs/`](./docs/) — `gaps-efficiency.md`, `harness-analysis.md`, `plan-gaps.md`, `refactor-plan.md`.
 | `harness/install.sh` · `harness/install-dev.sh` | Idempotent installers — clone/pull or local-sync the extension into the live agent dir |
 
 > **About the skills — nothing is missing.** The 6 cards in `harness/core/skillcards/` are the full operating discipline: they're what the dev loop injects and `compile-skills.mjs` validates. The injected card is **phase-scoped** — the planner card while planning, builder while building, verifier while verifying, reviewer at plan/review gates (override via `skillCard` in `harness.json`; unmapped stages fall back to the configured default). The long-form `SKILL.md` sources are intentionally not shipped — loading ~1,300–3,800-token templates into every agent context recreates the exact "skills fill context" leak this design removes (14,362 → 2,245 tokens). The harness never reads them at runtime; want them, or your own skills? Drop them in `~/.pi/agent/skills/<name>/SKILL.md` — the validator still passes on machines without that root.

@@ -1,6 +1,6 @@
 # Implementation Plan — efficiency gaps: audit + remaining work
 
-Source: `GAPS-EFFICIENCY.md`. This file is the **living plan**. It was originally written
+Source: `./gaps-efficiency.md`. This file is the **living plan**. It was originally written
 when all 11 gaps were open; an audit against the current source (see **Current status**)
 shows **8 of 11 are already implemented** in commit `3a43970` ("Fix 8/11 efficiency gaps").
 This plan therefore (a) records the audit, and (b) is implementation-ready for the **3 that
