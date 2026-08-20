@@ -310,7 +310,7 @@ export function reportRows(run) {
   const laneMeaning = lane === "S" ? "trivial" : lane === "M" ? "small" : lane === "L" ? "boundary/risk" : "unset";
   rows.push(["lane", lane, laneMeaning]);
   if (run.verifyTier) rows.push(["verify tier", run.verifyTier, "quick/standard/full"]);
-  const stages = run.stage === "review" ? "planning → development → review" : run.stage === "development" ? "planning → development" : run.stage ? "planning" : "?";
+  const stages = run.stage === "review" ? "requirements → planning → development → review" : run.stage === "development" ? "requirements → planning → development" : run.stage === "planning" ? "requirements → planning" : run.stage === "requirements" ? "requirements" : "?";
   rows.push(["stages", stages, "lifecycle"]);
   rows.push(["SAFETY", "", ""]);
   rows.push(

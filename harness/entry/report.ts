@@ -24,6 +24,10 @@ export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string,
   if (run.plan?.gate1 === "rejected") {
     lines.push("Ideation concluded: no viable idea — no build was performed. Use /run --phase ideate to explore other ideas.");
   }
+  if (run.plan?.requirements?.length) {
+    lines.push("Requirements (first-principles self-review):");
+    for (const r of run.plan.requirements) lines.push(`  - ${r}`);
+  }
   lines.push("=== END HARNESS REPORT ===");
   const text = lines.join("\n");
   // Interactive TUI: render through the notification path so the report shows as

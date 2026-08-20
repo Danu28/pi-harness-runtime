@@ -81,6 +81,7 @@ import {
   checkFailureMemory,
   suggestBudget,
   parseRemainingEstimate,
+  parseRequirements,
   renderTable,
   reportColor,
   reportRows,
@@ -426,8 +427,8 @@ export default function harness(pi: ExtensionAPI) {
           editLevel: (flags.edit as ThinkingLevel) ?? null,
           done: false,
         },
-        plan: { goal: "", anchors: "", tasks: [], risky: false, candidates: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } },
-        stage: "planning",
+        plan: { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } },
+        stage: "requirements",
         phase: (flags.phase as "ideate" | "implement") ?? "implement",
         phaseForced: flags.phase != null,
         persona: { domain: (flags.persona as string) ?? null },
@@ -632,11 +633,11 @@ export default function harness(pi: ExtensionAPI) {
 
       const cfg = loadHarnessConfig(run.cwd);
       // An ideate-phase run in the planning stage gets the brainstormer card.
-      let card = skillCardNote(cfg, run.phase === "ideate" && run.stage === "planning" ? "ideation" : run.stage, run.stats);
+      let card = skillCardNote(cfg, run.phase === "ideate" && (run.stage === "planning" || run.stage === "requirements") ? "ideation" : run.stage, run.stats);
       // P3-T2: quick-tier runs skip the verifier card even on mid-review resume
       // (consistent with the one-shot review-entry wiring above).
       if (run.stage === "review" && (run.verifyTier ?? "standard") === "quick") card = "";
-      const discipline = activeCardNames(cfg, run.phase === "ideate" && run.stage === "planning" ? "ideation" : run.stage).join(" + ");
+      const discipline = activeCardNames(cfg, run.phase === "ideate" && (run.stage === "planning" || run.stage === "requirements") ? "ideation" : run.stage).join(" + ");
       ctx.ui.notify(`Harness: resumed +${sized} turns (budget ${run.budget.maxTurns}) — ${run.verifyLabel} | stage ${run.stage ?? "planning"} | discipline ${discipline || "(default)"}`, "info");
       try {
         pi.sendUserMessage(prompt + card);
@@ -1451,7 +1452,7 @@ function editCoachForEvent(
     if (!run.planning?.done && run.phase === "ideate") {
       const cand = parseCandidates(text);
       if (cand.length) {
-        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
+        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
         run.plan.candidates = cand;
         if (run.plan.gate1 == null && gate1Required(run.phase, run.plan)) {
           run.plan.gate1 = "pending";
@@ -1459,10 +1460,22 @@ function editCoachForEvent(
         writeRun(run);
       }
     }
-    if (!run.planning?.done && tasklistEnabled(planLevel(run))) {
+    // Requirement-analysis stage: the model drafts its first-pass requirements and
+    // self-reviews them through the first-principles lens (Question/Delete/
+    // Simplify/Accelerate/Automate) BEFORE committing to a plan. The refined
+    // list feeds run.plan.requirements and surfaces in the report.
+    if (!run.planning?.done) {
+      const reqs = parseRequirements(text);
+      if (reqs.length) {
+        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
+        run.plan.requirements = reqs;
+        writeRun(run);
+      }
+    }
+        if (!run.planning?.done && tasklistEnabled(planLevel(run))) {
       const p = parsePlan(text);
       if (p.tasks.length || p.goal || p.plan) {
-        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } }; // guard for crash-recovered runs
+        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } }; // guard for crash-recovered runs
         run.plan.goal = p.goal || run.plan.goal;
         run.plan.anchors = p.plan || run.plan.anchors;
         // T3: merge, don't replace — a mid-run partial restate (fewer tasks)
@@ -1477,6 +1490,9 @@ function editCoachForEvent(
         // Re-select the verify tier from the actual plan footprint — a boundary
         // task forces Full regardless of the initial lane heuristic.
         run.verifyTier = verifyTier({ lane: run.lane, plan: run.plan });
+        // Requirement-analysis done: a plan is committed now, so the initial
+        // requirements stage hands off to planning (before development).
+        if (run.stage === "requirements") run.stage = "planning";
         writeRun(run);
       }
     }
@@ -1496,7 +1512,7 @@ function editCoachForEvent(
     {
       const prog = parsePlanProgress(text);
       if (prog.total > 0) {
-        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
+        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
         run.plan.progress = prog;
       }
     }

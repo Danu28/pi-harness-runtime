@@ -244,6 +244,32 @@ export function parseCandidates(text) {
 }
 
 /**
+ * Parse the model's requirement-analysis pass from a `## Requirements` block
+ * (requirement-analysis stage). Returns a list of requirement strings, mirroring
+ * parseCandidates: a numbered/bulleted list under the heading is split into items
+ * and each is cleaned. Empty when the model has not produced a requirements block.
+ *
+ * The requirements pass is the FIRST pre-development step: the model draft its
+ * own first answer to the task, then self-reviews it through the first-principles
+ * lens (Question → Delete → Simplify → Accelerate → Automate) before committing
+ * to a plan. The refined requirements feed `run.requirements` and surface in the
+ * report; the plan then builds on them.
+ */
+export function parseRequirements(text) {
+  const s = String(text ?? "");
+  const m = s.match(/##\s*Requirements/i);
+  if (!m) return [];
+  const body = s.slice(m.index + m[0].length);
+  const end = body.search(/^##(?!#)/m);
+  const block = (end === -1 ? body : body.slice(0, end)).trim();
+  if (!block) return [];
+  return block
+    .split(/\n(?=(?:\d+[\.\)]\s|[-*]\s))/)
+    .map((l) => l.replace(/^\s*(?:\d+[\.\)]\s|[-*]\s)/, "").trim())
+    .filter(Boolean);
+}
+
+/**
  * Compute plan-execution progress (revised-plan A4) from a message's checkbox
  * ticks (`- [x]` done vs `- [ ]` open). Returns { done, total, remaining,
  * current } where current = the first open task's text (the task Build should

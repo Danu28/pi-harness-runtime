@@ -46,6 +46,7 @@ export { parsePhasePrediction } from "./modules/parse.mjs";
 export { parsePlan } from "./modules/parse.mjs";
 export { parsePlanProgress } from "./modules/parse.mjs";
 export { parseRemainingEstimate } from "./modules/parse.mjs";
+export { parseRequirements } from "./modules/parse.mjs";
 export { parseRunArgs } from "./modules/parse.mjs";
 export { parseThinkingPrediction } from "./modules/parse.mjs";
 export { scopeAllowed } from "./modules/safety.mjs";

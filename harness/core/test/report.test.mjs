@@ -153,9 +153,10 @@ test("reportRows shows the lifecycle stages reached", () => {
     scope: { declared: [] },
   };
   const stage = (s) => reportRows({ ...base, stage: s }).find((r) => r[0] === "stages")[1];
-  assert.equal(stage("review"), "planning → development → review");
-  assert.equal(stage("development"), "planning → development");
-  assert.equal(stage("planning"), "planning");
+  assert.equal(stage("review"), "requirements → planning → development → review");
+  assert.equal(stage("development"), "requirements → planning → development");
+  assert.equal(stage("planning"), "requirements → planning");
+  assert.equal(stage("requirements"), "requirements");
   assert.equal(reportRows({ ...base }).find((r) => r[0] === "stages")[1], "?");
 });
 

@@ -55,6 +55,13 @@ scope are blocked. Your job is judgment and precision.
 ## Snapshot
 {{SNAPSHOT}}
 
+## Requirements (do this FIRST, before any plan)
+Draft a first-pass '## Requirements' (a numbered/bulleted list) for the task, then
+self-review it through the first-principles lens: Question every requirement (source,
+who benefits, what evidence, what breaks if ignored), Delete anything that doesn't
+justify its existence, Simplify what remains, and only then Accelerate/Automate. The
+refined requirements feed the plan you commit next in '## Plan'.
+
 ## Protocol
 1. Restate the task in one line. If ambiguous, ask ONE clarifying question — then proceed.
 2. Call harness_declare with ONLY the files the task requires (relative paths), before your first edit. Edits are blocked until you declare — do not declare memory/, docs/, or unrelated files.

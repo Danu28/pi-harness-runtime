@@ -63,6 +63,10 @@ export interface RunState {
     anchors: string;
     tasks: { text: string; footprint: string }[];
     risky: boolean;
+    // requirements = the requirement-analysis pass (first-principles self-review)
+    // surfaced before planning; the model challenges its own first answer with
+    // the question/delete/simplify lens, and the refined list feeds the plan.
+    requirements: string[];
     // candidates = the brainstormer's `## Candidate Requirements` (ideation
     // feature), captured before the plan; feeds Gate 1.
     candidates: string[];
@@ -79,7 +83,7 @@ export interface RunState {
   };
   // Run lifecycle stage. planning → (harness_declare) → development →
   // (harness_review) → review. Printed so the user sees which stage is active.
-  stage: "planning" | "development" | "review";
+  stage: "requirements" | "planning" | "development" | "review";
   // Run phase (ideation feature): "ideate" runs a divergent brainstorm phase
   // (brainstormer card) before filtering (Gate 1) and planning; "implement" is
   // the default pipeline. Set via --phase flag or the `Phase:` marker.

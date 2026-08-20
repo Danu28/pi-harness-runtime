@@ -20,6 +20,13 @@ scope are blocked. Your job is judgment and precision.
 ## Snapshot
 {{SNAPSHOT}}
 
+## Requirements (do this FIRST, before any plan)
+Draft a first-pass `## Requirements` (a numbered/bulleted list) for the task, then
+self-review it through the first-principles lens: Question every requirement (source,
+who benefits, what evidence, what breaks if ignored), Delete anything that doesn't
+justify its existence, Simplify what remains, and only then Accelerate/Automate. The
+refined requirements feed the plan you commit next in `## Plan`.
+
 ## Persona
 {{PERSONA}}
 

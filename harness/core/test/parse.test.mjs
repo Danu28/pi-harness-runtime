@@ -25,6 +25,7 @@ import {
   parseLanePrediction,
   parsePhasePrediction,
   parseCandidates,
+  parseRequirements,
   gate1Required,
   classifyLane,
   gate2Required,
@@ -179,6 +180,23 @@ test("parseCandidates extracts a Candidate Requirements block", () => {
   // no block → empty
   assert.deepEqual(parseCandidates("just a task"), []);
   assert.deepEqual(parseCandidates(""), []);
+});
+
+test("parseRequirements extracts a Requirements block", () => {
+  const text = `## Requirements
+1. Users can run a task up to a chosen stage.
+2. Users can self-review requirements via first-principles before planning.
+
+## Plan
+...`;
+  assert.deepEqual(parseRequirements(text), [
+    "Users can run a task up to a chosen stage.",
+    "Users can self-review requirements via first-principles before planning.",
+  ]);
+  assert.deepEqual(parseRequirements(`## Requirements\n- A\n- B`), ["A", "B"]);
+  // no block → empty
+  assert.deepEqual(parseRequirements("just a task"), []);
+  assert.deepEqual(parseRequirements(""), []);
 });
 
 test("parsePlan extracts goal, plan body, footprint-tagged tasks, risky", () => {
