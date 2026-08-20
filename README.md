@@ -14,9 +14,8 @@ Everything lives under one self-contained directory, `harness/` — the complete
 |------|------|
 | `harness/index.ts` | The extension entry: registers `/run`, `/harness-resume`, `/harness-reset`, `/harness-stats`, `/harness-clean-temp`, the `harness_declare`/`harness_review` tools, and the gate/telemetry machinery (Plans today rely on the planning/review stages + thinking ladder) |
 | `harness/core/harness-core.mjs` | **Barrel entry** to the pure logic — re-exports the full API surface from the 12 cohesion modules below (unit-testable without pi) |
-| `harness/core/{constants,safety,parse,output,detect,git,report,thinking,stages,artifacts,state}.mjs` | The pure logic split into focused cohesion modules (scope checks, budget ladder, snapshot/tldr, auto-commit, gate cache, skill-card mapping, …) |
-| `harness/core/*.test.mjs` | Per-module unit tests (111 total, zero deps, `node --test harness/core/*.test.mjs`) |
-| `harness/core/test-utils.mjs` | Shared test fixtures (`makeProject`/`rmProject`/`ALL_PROBES`/`CWD`) |
+| `harness/core/modules/*.mjs` | The 11 pure-logic cohesion modules (scope checks, budget ladder, snapshot/tldr, auto-commit, gate cache, skill-card mapping, …) |
+| `harness/core/test/*.test.mjs` | Per-module unit tests (111 total, zero deps, `node --test harness/core/test/*.test.mjs`) + `test-utils.mjs` fixtures |
 | `harness/{index-consts,protocol,thinking,cards,settle,report}.ts` | Shared constants/types + helper logic split out of the entry |
 | `harness/core/compile-skills.mjs` | Card validator — enforces a card exists + token budget, cross-checks against full `SKILL.md` sources when a skills root is present |
 | `harness/prompts/run.md` | The `/run` protocol prompt (task/snapshot/persona markers) — read by the harness at runtime |

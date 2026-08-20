@@ -18,7 +18,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"harness/core/*.test.mjs\"",
+    "test": "node --test \"harness/core/test/*.test.mjs\"",
     "validate-skills": "node harness/core/compile-skills.mjs"
   },
   "devDependencies": {

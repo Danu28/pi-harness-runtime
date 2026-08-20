@@ -80,7 +80,7 @@ import {
   dangerTier,
   editRequiresGate,
   nearestPackageDir,
-} from "./harness-core.mjs";
+} from "../harness-core.mjs";
 
 
 test("stageSkillCard maps run stages to operating-discipline cards", () => {

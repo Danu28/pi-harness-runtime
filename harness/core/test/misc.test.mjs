@@ -80,10 +80,10 @@ import {
   dangerTier,
   editRequiresGate,
   nearestPackageDir,
-} from "./harness-core.mjs";
+} from "../harness-core.mjs";
 
 
 test("harness.ts no longer consults laneThinking for thinking levels (P1 contract)", () => {
-  const src = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../../index.ts", import.meta.url), "utf8");
   assert.ok(!src.includes("laneThinking"), "lane must not appear in thinking-level code");
 });

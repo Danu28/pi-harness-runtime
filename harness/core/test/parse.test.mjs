@@ -80,7 +80,7 @@ import {
   dangerTier,
   editRequiresGate,
   nearestPackageDir,
-} from "./harness-core.mjs";
+} from "../harness-core.mjs";
 
 
 test("parseRunArgs extracts --think/--edit/--lane and leaves the task", () => {

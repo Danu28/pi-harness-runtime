@@ -80,7 +80,7 @@ import {
   dangerTier,
   editRequiresGate,
   nearestPackageDir,
-} from "./harness-core.mjs";
+} from "../harness-core.mjs";
 import { CWD, makeProject, rmProject, ALL_PROBES } from "./test-utils.mjs";
 
 test("loadSkillCard reads a card and returns empty for missing/unsafe names", () => {

@@ -80,7 +80,7 @@ import {
   dangerTier,
   editRequiresGate,
   nearestPackageDir,
-} from "./harness-core.mjs";
+} from "../harness-core.mjs";
 
 
 test("globToRegExp crosses path segments", () => {
