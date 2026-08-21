@@ -177,6 +177,18 @@ test("buildSnapshot inlines changed-file heads when the diff does not cover them
   }
 });
 
+test("buildSnapshot prepends caller-supplied meta (resume context)", () => {
+  const dir = makeProject({ "package.json": "{}" });
+  try {
+    const snap = buildSnapshot(dir, { baseline: { ok: true }, meta: ["stage: development", "scope (2 declared)"] });
+    assert.ok(snap.includes("stage: development"), "meta line 1 present");
+    assert.ok(snap.includes("scope (2 declared)"), "meta line 2 present");
+    const plain = buildSnapshot(dir, { baseline: { ok: true } });
+    assert.ok(!plain.includes("stage: development"), "no meta = no extra line");
+  } finally {
+    rmProject(dir);
+  }
+});
 test("reportRows classifies a failing full gate via lazy baselineFull (AC6)", () => {
   const base = {
     stats: { calls: 1, tokensIn: 1, tokensCached: 0, tokensOut: 1, cost: 0, gateRuns: 1, gateFails: 0, peakTurnCost: 0, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, turns: 2, finalFull: { ok: false } },

@@ -17,7 +17,7 @@ import { symbolsForFile } from "./git.mjs";
 import { tail } from "./output.mjs";
 import { taskScore } from "./git.mjs";
 import { taskTerms } from "./git.mjs";
-export function buildSnapshot(cwd, { verifyCmd, baseline, ignore, task } = {}) {
+export function buildSnapshot(cwd, { verifyCmd, baseline, ignore, task, meta } = {}) {
   const ig = Array.isArray(ignore) && ignore.length ? ignore : DEFAULT_CONFIG.ignore;
   // One porcelain spawn reused for both the status line and the changed set.
   const git = gitPorcelain(cwd);
@@ -103,6 +103,11 @@ export function buildSnapshot(cwd, { verifyCmd, baseline, ignore, task } = {}) {
   // doesn't need extra read calls to learn what a resumed run has done so far.
   const diff = gitDiff(cwd, 3000);
   if (diff) s += "- diff (uncommitted tracked changes):\n" + diff.split("\n").map((l) => "  " + l).join("\n") + "\n";
+  // Resume context (enhancement): the caller may pass extra run-state lines
+  // (stage, declared scope, plan size) so a resumed agent instantly knows its
+  // live boundary without extra reads. Empty by default - no extra output.
+  const metaLines = Array.isArray(meta) ? meta : meta ? [meta] : [];
+  for (const m of metaLines) if (m) s += `- ${m}\n`;
   s += "- files:\n";
   const scanned = [];
   for (const rel of files) {

@@ -598,7 +598,17 @@ export default function harness(pi: ExtensionAPI) {
       writeRun(run);
       pi.setThinkingLevel(run.ladder.escalated ? run.ladder.thinkingEscalated : startThinking(run));
 
-      let snapshot = buildSnapshot(run.cwd, { verifyCmd: run.verifyCmd, baseline: run.baseline, task: run.task });
+      let snapshot = buildSnapshot(run.cwd, {
+        verifyCmd: run.verifyCmd,
+        baseline: run.baseline,
+        task: run.task,
+        meta: [
+          `stage: ${run.stage ?? "planning"}`,
+          `scope (${run.scope?.declared?.length ?? 0} declared)`,
+          run.plan?.tasks?.length ? `plan: ${run.plan.tasks.length} tasks` : null,
+        ].filter(Boolean),
+      });
+
       const planTasks = run.plan?.tasks?.length ? run.plan.tasks : null;
       const planBlock = planTasks
         ? `## Plan (${planTasks.length} tasks — continue from the first unfinished)\n` +
