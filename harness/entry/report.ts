@@ -1,6 +1,6 @@
 // report.ts — extracted from harness/index.ts (Batch 5 of REFACTOR-PLAN.md).
 // Pure helpers — identical to the original source.
-import { buildTldr, color, renderTable, reportRows, tail, USE_COLOR } from "../core/harness-core.mjs";
+import { buildTldr, changedPaths, color, isHarnessPath, renderTable, reportRows, tail, USE_COLOR } from "../core/harness-core.mjs";
 import type { RunState } from "./index-consts.ts";
 /** Print the HARNESS REPORT table + gate notes. */
 export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string, level?: string) => void } }) {
@@ -24,6 +24,25 @@ export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string,
   if (run.plan?.requirements?.length) {
     lines.push("Requirements (first-principles self-review):");
     for (const r of run.plan.requirements) lines.push(`  - ${r}`);
+  }
+  // G2 (scope leak): flag changed files that fall outside the declared edit scope
+  // (advisory only — masking .harness artifacts). Lets the report answer "did I
+  // touch more than I said I would?" at the last chance before commit.
+  try {
+    const declared = run.scope?.declared ?? [];
+    const changed = changedPaths(run.cwd);
+    const out = changed.filter((rel) => !declared.includes(rel) && !isHarnessPath(rel));
+    if (out.length) {
+      lines.push(`Note: ${out.length} changed file(s) outside declared scope: ${out.slice(0, 5).join(", ")}${out.length > 5 ? "..." : ""}.`);
+    }
+  } catch {
+    /* no git / changedPaths unavailable — skip the note */
+  }
+  // G1-lite (structural review guard): warn when review is reached with plan
+  // tasks still unchecked, so "done" can't silently mean unfinished work.
+  const prog = run.plan?.progress;
+  if (run.stage === "review" && prog && prog.total > 0 && prog.done < prog.total) {
+    lines.push(`Note: review entered with ${prog.remaining} plan task(s) unchecked (${prog.done}/${prog.total}).`);
   }
   lines.push("=== END HARNESS REPORT ===");
   const text = lines.join("\n");

@@ -86,3 +86,28 @@ diff and declares `Acceptance: met|partial|unmet`; report renders rows + notes.
 - No automatic scope-expansion — the agent never self-authorizes edits outside
   declared scope.
 - No per-edit dependency graph; `selectiveTests` stays best-effort, not exact.
+
+---
+
+## Sprint roadmap
+
+**Sprint 1 — traceability + fast gate + review guard** (started)
+- R1 requirement IDs at capture (R1., R2.…)
+- D1 `selectiveTests` default-on (safe fallback when it can't narrow)
+- G2 report note for changed files outside declared scope
+- G1-lite structural review guard: warn if review entered with tasks unchecked
+
+**Sprint 2 — requirement → task → acceptance mapping**
+- R2 review-time requirement mapping (each R# → met/partial/unmet, advisory)
+- G3 per-requirement met-status folded into the report rows
+
+**Sprint 3 — planning hardening**
+- P1 task-id normalization (dedupe + progress match on normalized text)
+- P2 plan↔declared-scope cross-check note
+- P4 re-confirm scope on `/harness-resume`
+
+**Sprint 4 — dev efficiency / safety nets**
+- D2 mid-run diff-size warning
+- D3 auto-retry on edit mismatch (or keep the coach hint)
+- P3 lane-vs-actual-plan mismatch warning
+

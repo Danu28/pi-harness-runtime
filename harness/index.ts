@@ -1133,8 +1133,11 @@ export default function harness(pi: ExtensionAPI) {
     }
 
     // T2 (selective tests): narrow the edit-gate to affected tests for recognized
-    // runners; the review/full gate is never narrowed.
-    if (cfg.selectiveTests && run.stage === "development") {
+    // runners; the review/full gate is never narrowed. Default-ON (D1): it falls
+    // back to the full command whenever it can't safely narrow, so opt-OUT via
+    // `selectiveTests: false` in harness.json stays the only control.
+    const selectiveOn = cfg.selectiveTests !== false;
+    if (selectiveOn && run.stage === "development") {
       const sel = testSelector(gateCmd, changed);
       if (sel.type === "selective") gateCmd = sel.cmd;
     }
@@ -1405,7 +1408,9 @@ function editCoachForEvent(
       const reqs = parseRequirements(text);
       if (reqs.length) {
         run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, requirements: [], gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
-        run.plan.requirements = reqs;
+        // R1 (traceability): stable ordinals so plan tasks and the review can
+        // cite each requirement (R1., R2.…) instead of matching raw text.
+        run.plan.requirements = reqs.map((r, i) => `R${i + 1}. ${String(r).trim()}`);
         writeRun(run);
       }
     }
