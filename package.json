@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "1.12.0",
+  "version": "2.0.0",
   "description": "pi extension: /run autonomous task harness — baseline, declared scope, gate-verified edits, telemetry report, crash recovery",
   "keywords": [
     "pi",
