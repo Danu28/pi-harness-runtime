@@ -23,6 +23,7 @@ export { globToRegExp } from "./modules/safety.mjs";
 export { insideProject } from "./modules/safety.mjs";
 export { isIgnored } from "./modules/safety.mjs";
 export { normalizeRel } from "./modules/safety.mjs";
+export { normalizeTaskText } from "./modules/parse.mjs";
 export { parseAcceptance } from "./modules/parse.mjs";
 export { parseCommitSubject } from "./modules/parse.mjs";
 export { parseLanePrediction } from "./modules/parse.mjs";

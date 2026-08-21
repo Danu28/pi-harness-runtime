@@ -36,6 +36,7 @@ import {
   loadRunStats,
   loadSkillCard,
   normalizeBudget,
+  normalizeTaskText,
   buildSnapshot,
   buildTldr,
   CORE_VERSION,
@@ -635,7 +636,11 @@ export default function harness(pi: ExtensionAPI) {
       const discipline = activeCardNames(cfg, run.stage).join(" + ");
       ctx.ui.notify(`Harness: resumed +${sized} turns (budget ${run.budget.maxTurns}) — ${run.verifyLabel} | stage ${run.stage ?? "planning"} | discipline ${discipline || "(default)"}`, "info");
       try {
-        pi.sendUserMessage(prompt + card);
+        const scopeNote = (run.scope?.declared?.length ?? 0) > 0
+          ? " Note: re-verify the declared scope still matches the current plan; re-call harness_declare if the task has pivoted since the stop."
+          : "";
+
+        pi.sendUserMessage(prompt + card + scopeNote);
       } catch (err) {
         finishRun(run, pi);
         ctx.ui.notify(`Harness: resume failed to start — ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -1315,8 +1320,10 @@ function mergePlanTasks(
   next: { text: string; footprint: string }[],
 ): { text: string; footprint: string }[] {
   const out = [...(prev ?? [])];
+  const seen = new Set(out.map((o) => normalizeTaskText(o.text)));
   for (const t of next) {
-    if (!out.some((o) => o.text === t.text)) out.push(t);
+    const k = normalizeTaskText(t.text);
+    if (!seen.has(k)) { seen.add(k); out.push(t); }
   }
   return out;
 }

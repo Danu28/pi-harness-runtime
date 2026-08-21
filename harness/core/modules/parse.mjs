@@ -260,6 +260,20 @@ export function parseRequirementVerdicts(text) {
 }
 
 /**
+ * Normalize a plan-task line for identity comparison (Sprint 3, P1): trim,
+ * collapse internal whitespace, lowercase, and strip a leading task tag like
+ * "T1." / "T1:" so restated-but-same tasks don't duplicate across plan merges
+ * (mergePlanTasks). Pure; used only for dedupe identity, never for display.
+ */
+export function normalizeTaskText(text) {
+  return String(text ?? "")
+    .replace(/^[Tt]\d+\s*[.:)]\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
  * Parse a "Persona: <domain>" marker from the model's first message. Returns a
  * validated taxonomy entry, or null if absent/invalid (caller falls back to
  * generalist). Mirrors parseThinkingPrediction.

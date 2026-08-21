@@ -101,10 +101,10 @@ diff and declares `Acceptance: met|partial|unmet`; report renders rows + notes.
 - [x] R2 review-time requirement mapping (each R# → met/partial/unmet, advisory)
 - [x] G3 per-requirement met-status folded into the report rows
 
-**Sprint 3 — planning hardening**
-- P1 task-id normalization (dedupe + progress match on normalized text)
-- P2 plan↔declared-scope cross-check note
-- P4 re-confirm scope on `/harness-resume`
+**Sprint 3 — planning hardening** (done)
+- [x] P1 task-id normalization (dedupe + progress match on normalized text)
+- [x] P2 plan↔declared-scope cross-check note
+- [x] P4 re-confirm scope on `/harness-resume`
 
 **Sprint 4 — dev efficiency / safety nets**
 - D2 mid-run diff-size warning

@@ -40,6 +40,13 @@ export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string,
     if (out.length) {
       lines.push(`Note: ${out.length} changed file(s) outside declared scope: ${out.slice(0, 5).join(", ")}${out.length > 5 ? "..." : ""}.`);
     }
+    // P2 (plan/scope mismatch): flag declared files that were never modified —
+    // over-declared scope is the inverse of the leak above, hinting the planned
+    // footprint didn't match the work actually done.
+    const unused = declared.filter((rel) => !changed.includes(rel));
+    if (unused.length) {
+      lines.push(`Note: ${unused.length} declared file(s) never modified: ${unused.slice(0, 5).join(", ")}${unused.length > 5 ? "..." : ""}.`);
+    }
   } catch {
     /* no git / changedPaths unavailable — skip the note */
   }

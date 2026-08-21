@@ -25,6 +25,7 @@ import {
   parseLanePrediction,
   parseRequirements,
   parseRequirementVerdicts,
+  normalizeTaskText,
   classifyLane,
   gate2Required,
   parsePlan,
@@ -179,6 +180,14 @@ test("parseRequirementVerdicts maps R# to met/partial/unmet", () => {
   assert.deepEqual(parseRequirementVerdicts(""), {});
   // "met" must not match inside "unmet" (word boundary)
  assert.deepEqual(parseRequirementVerdicts("R1: unmet"), { R1: "unmet" });
+});
+
+test("normalizeTaskText collapses whitespace, case, and task tags", () => {
+  assert.equal(normalizeTaskText("  Fix   the  bug  "), "fix the bug");
+  assert.equal(normalizeTaskText("T1. Reorder middleware"), "reorder middleware");
+  assert.equal(normalizeTaskText("Add a regression test"), "add a regression test");
+  assert.equal(normalizeTaskText(""), "");
+  assert.equal(normalizeTaskText(null), "");
 });
 
 test("parsePlan extracts goal, plan body, footprint-tagged tasks, risky", () => {
