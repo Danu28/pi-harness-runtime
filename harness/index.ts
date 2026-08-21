@@ -1171,6 +1171,14 @@ export default function harness(pi: ExtensionAPI) {
     if (!cached) run.stats.gateRuns++;
     run.stats.gateDirty = false; // the gate just re-verified the current tree
     let coach = cached ? "\nHARNESS: gate result reused from cache (tree unchanged since last green)." : "";
+    // D2 (diff-size safety net): a soft warning when the working diff grows past
+    // a threshold (cfg.diffMaxFiles, default 15) so big diffs are flagged before
+    // review instead of discovered after the fact. Advisory only.
+    if (run.stage === "development" && changed.length >= (cfg.diffMaxFiles ?? 15)) {
+      coach += `
+HARNESS: diff is large (${changed.length} changed files) - consider committing or narrowing scope before it gets harder to review.`;
+    }
+
     if (r.ok) {
       run.stats.consecutiveFails = 0;
       // Reward a green streak: if thinking was escalated, drop it back down

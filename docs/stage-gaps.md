@@ -106,8 +106,8 @@ diff and declares `Acceptance: met|partial|unmet`; report renders rows + notes.
 - [x] P2 plan↔declared-scope cross-check note
 - [x] P4 re-confirm scope on `/harness-resume`
 
-**Sprint 4 — dev efficiency / safety nets**
-- D2 mid-run diff-size warning
-- D3 auto-retry on edit mismatch (or keep the coach hint)
-- P3 lane-vs-actual-plan mismatch warning
+**Sprint 4 — dev efficiency / safety nets** (done)
+- [x] D2 mid-run diff-size warning
+- [x] D3 auto-retry on edit mismatch (kept the existing coach hint — no machine-drivable retry path)
+- [x] P3 lane-vs-actual-plan mismatch warning
 

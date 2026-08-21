@@ -56,6 +56,11 @@ export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string,
   if (run.stage === "review" && prog && prog.total > 0 && prog.done < prog.total) {
     lines.push(`Note: review entered with ${prog.remaining} plan task(s) unchecked (${prog.done}/${prog.total}).`);
   }
+  // P3 (lane/tier mismatch): a boundary/risk plan under a non-L lane means the
+  // initial triage under-called the risk — surface the tier bump explicitly.
+  if (run.plan?.risky && run.lane && run.lane !== "L") {
+    lines.push(`Note: plan carries a boundary/risk footprint but the run lane was ${run.lane} — verify tier raised to ${run.verifyTier ?? "full"}.`);
+  }
   lines.push("=== END HARNESS REPORT ===");
   const text = lines.join("\n");
   // Interactive TUI: render through the notification path so the report shows as
