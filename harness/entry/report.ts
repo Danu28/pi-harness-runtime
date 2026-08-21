@@ -23,7 +23,12 @@ export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string,
   }
   if (run.plan?.requirements?.length) {
     lines.push("Requirements (first-principles self-review):");
-    for (const r of run.plan.requirements) lines.push(`  - ${r}`);
+    const rv = run.requirementVerdicts ?? {};
+    for (const r of run.plan.requirements) {
+      const id = String(r).split(/[. ]/)[0];
+      const v = rv[id] ? ` — ${rv[id]}` : "";
+      lines.push(`  - ${r}${v}`);
+    }
   }
   // G2 (scope leak): flag changed files that fall outside the declared edit scope
   // (advisory only — masking .harness artifacts). Lets the report answer "did I

@@ -245,6 +245,21 @@ export function parsePlanProgress(text) {
 }
 
 /**
+ * Parse per-requirement verdicts from the model's review message (Sprint 2, R2).
+ * Matches lines/blocks like `R1: met`, `R2: partial`, `R3 = unmet`. Returns an
+ * object keyed by requirement id ("R1") → verdict ("met"|"partial"|"unmet").
+ * Best-effort: no matches → {}. Feeds the report's per-requirement status.
+ */
+export function parseRequirementVerdicts(text) {
+  const s = String(text ?? "");
+  const out = {};
+  const re = /\bR(\d+)\s*[:=]\s*(met|partial|unmet)\b/gi;
+  let m;
+  while ((m = re.exec(s))) out[`R${m[1]}`] = m[2].toLowerCase();
+  return out;
+}
+
+/**
  * Parse a "Persona: <domain>" marker from the model's first message. Returns a
  * validated taxonomy entry, or null if absent/invalid (caller falls back to
  * generalist). Mirrors parseThinkingPrediction.

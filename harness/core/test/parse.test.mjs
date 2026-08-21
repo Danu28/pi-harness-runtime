@@ -24,6 +24,7 @@ import {
   normalizeBudget,
   parseLanePrediction,
   parseRequirements,
+  parseRequirementVerdicts,
   classifyLane,
   gate2Required,
   parsePlan,
@@ -164,6 +165,20 @@ test("parseRequirements extracts a Requirements block", () => {
   // no block → empty
   assert.deepEqual(parseRequirements("just a task"), []);
   assert.deepEqual(parseRequirements(""), []);
+});
+
+test("parseRequirementVerdicts maps R# to met/partial/unmet", () => {
+ assert.deepEqual(parseRequirementVerdicts("R1: met, R2: partial, R3: unmet"), {
+    R1: "met",
+    R2: "partial",
+    R3: "unmet",
+  });
+ assert.deepEqual(parseRequirementVerdicts("R1 = MET, R2 = Partial"), { R1: "met", R2: "partial" });
+  // no matches (empty verdict set)
+  assert.deepEqual(parseRequirementVerdicts("all requirements met"), {});
+  assert.deepEqual(parseRequirementVerdicts(""), {});
+  // "met" must not match inside "unmet" (word boundary)
+ assert.deepEqual(parseRequirementVerdicts("R1: unmet"), { R1: "unmet" });
 });
 
 test("parsePlan extracts goal, plan body, footprint-tagged tasks, risky", () => {

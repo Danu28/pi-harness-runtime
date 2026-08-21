@@ -97,9 +97,9 @@ diff and declares `Acceptance: met|partial|unmet`; report renders rows + notes.
 - G2 report note for changed files outside declared scope
 - G1-lite structural review guard: warn if review entered with tasks unchecked
 
-**Sprint 2 — requirement → task → acceptance mapping**
-- R2 review-time requirement mapping (each R# → met/partial/unmet, advisory)
-- G3 per-requirement met-status folded into the report rows
+**Sprint 2 — requirement → task → acceptance mapping** (done)
+- [x] R2 review-time requirement mapping (each R# → met/partial/unmet, advisory)
+- [x] G3 per-requirement met-status folded into the report rows
 
 **Sprint 3 — planning hardening**
 - P1 task-id normalization (dedupe + progress match on normalized text)

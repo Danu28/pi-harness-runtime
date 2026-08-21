@@ -79,6 +79,7 @@ import {
   suggestBudget,
   parseRemainingEstimate,
   parseRequirements,
+  parseRequirementVerdicts,
   renderTable,
   reportColor,
   reportRows,
@@ -1445,6 +1446,16 @@ function editCoachForEvent(
       const acc = parseAcceptance(text);
       if (acc.verdict || acc.criteria.length) {
         run.acceptance = acc;
+        writeRun(run);
+      }
+    }
+    // Requirement verdicts (Sprint 2, R2): capture per-requirement met/partial/
+    // unmet from the model's review message ("R1: met ...") so the report shows
+    // each requirement's closure. Latest wins; no-match leaves prior set.
+    if (run.stage === "review") {
+      const rv = parseRequirementVerdicts(text);
+      if (Object.keys(rv).length) {
+        run.requirementVerdicts = { ...(run.requirementVerdicts ?? {}), ...rv };
         writeRun(run);
       }
     }

@@ -122,6 +122,9 @@ export interface RunState {
   // check, and the cross-run trend hint — surfaced in the report; auto-commit
   // is blocked on an "unmet" verdict.
   acceptance: { verdict: "met" | "partial" | "unmet" | null; criteria: { text: string; done: boolean }[] };
+  // Requirement verdicts (Sprint 2): per-requirement met/partial/unmet as parsed
+  // from the model's review message. Keyed by id ("R1"). Fed to the report.
+  requirementVerdicts?: Record<string, string>;
   acceptCmd: string | null;
   acceptResult: { ok: boolean; head: string } | null;
   memoryCheck: { ok: boolean; note: string } | null;
