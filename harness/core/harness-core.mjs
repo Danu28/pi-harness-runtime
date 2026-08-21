@@ -1,19 +1,6 @@
 // harness-core.mjs — pure, dependency-free logic for the pi harness extension.
 // No pi imports; unit-testable with plain `node --test`. harness.ts wires this to pi.
-import { createHash } from "node:crypto";
-import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { DEFAULT_CONFIG } from "./modules/constants.mjs";
-import { LONGTERM_DIR } from "./modules/constants.mjs";
-import { TEMP_DIR } from "./modules/constants.mjs";
-import { THINK_LEVELS } from "./modules/constants.mjs";
-import { USE_COLOR } from "./modules/constants.mjs";
-import { color } from "./modules/constants.mjs";
-import { isIgnored } from "./modules/safety.mjs";
-import { normalizeRel } from "./modules/safety.mjs";
-import { shq } from "./modules/safety.mjs";
+// Pure re-export barrel: index.ts and the unit suite import the whole core surface here.
 
 // ---- barrel re-exports (Batch 1): moved-out modules -----------------------
 export { ACCEPT_VERDICTS } from "./modules/constants.mjs";
@@ -52,8 +39,6 @@ export { parseThinkingPrediction } from "./modules/parse.mjs";
 export { scopeAllowed } from "./modules/safety.mjs";
 export { shq } from "./modules/safety.mjs";
 export { stripAcceptanceBlocks } from "./modules/parse.mjs";
-import { gitPorcelain } from "./modules/git.mjs";
-import { setFromPorcelain } from "./modules/git.mjs";
 
 // ---- barrel re-exports (Batch 2): moved-out modules -----------------------
 export { EDIT_MISS_RE } from "./modules/output.mjs";

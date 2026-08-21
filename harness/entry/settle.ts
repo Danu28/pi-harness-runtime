@@ -20,14 +20,8 @@ export function lastAssistantText(ctx: ExtensionCommandContext): string {
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i] as { type?: string; message?: { role?: string; content?: unknown } } | undefined;
       if (e?.type === "message" && e.message?.role === "assistant") {
-        const c = e.message.content;
-        if (typeof c === "string") return c;
-        if (Array.isArray(c)) {
-          return (c as { type?: string; text?: string }[])
-            .filter((p) => p?.type === "text")
-            .map((p) => p.text ?? "")
-            .join("\n");
-        }
+        const c = contentText(e.message.content);
+        if (c) return c;
       }
     }
   } catch {

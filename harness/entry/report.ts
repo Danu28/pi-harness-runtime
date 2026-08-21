@@ -1,6 +1,6 @@
 // report.ts — extracted from harness/index.ts (Batch 5 of REFACTOR-PLAN.md).
 // Pure helpers — identical to the original source.
-import { buildTldr, color, renderTable, reportRows, tail } from "../core/harness-core.mjs";
+import { buildTldr, color, renderTable, reportRows, tail, USE_COLOR } from "../core/harness-core.mjs";
 import type { RunState } from "./index-consts.ts";
 /** Print the HARNESS REPORT table + gate notes. */
 export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string, level?: string) => void } }) {
@@ -34,7 +34,7 @@ export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string,
   // a discrete banner instead of raw console output interleaved mid-response.
   // Piped/RPC contexts (no TTY, e.g. the smoke suite) keep stdout/stderr output
   // so report markers stay machine-capturable.
-  if (process.stdout.isTTY && !process.env.NO_COLOR) {
+  if (USE_COLOR) {
     try {
       ctx.ui?.notify?.(text, "info");
       return;

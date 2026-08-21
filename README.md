@@ -20,7 +20,7 @@ Everything lives under one self-contained directory, `harness/` — the complete
 | `harness/core/compile-skills.mjs` | Card validator — enforces a card exists + token budget, cross-checks against full `SKILL.md` sources when a skills root is present |
 | `harness/prompts/run.md` | The `/run` protocol prompt (task/snapshot/persona markers) — read by the harness at runtime |
 
-> The historical analysis/planning docs live in [`docs/`](./docs/) — `gaps-efficiency.md`, `harness-analysis.md`, `plan-gaps.md`, `refactor-plan.md`.
+> The ponytail simplification audit and its remediation plan live in [`docs/ponytail-audit-plan.md`](./docs/ponytail-audit-plan.md).
 | `harness/install.sh` · `harness/install-dev.sh` | Idempotent installers — clone/pull or local-sync the extension into the live agent dir |
 
 > **About the skills — nothing is missing.** The 6 cards in `harness/core/skillcards/` are the full operating discipline: they're what the dev loop injects and `compile-skills.mjs` validates. The injected card is **phase-scoped** — the planner card while planning, builder while building, verifier while verifying, reviewer at plan/review gates (override via `skillCard` in `harness.json`; unmapped stages fall back to the configured default). The long-form `SKILL.md` sources are intentionally not shipped — loading ~1,300–3,800-token templates into every agent context recreates the exact "skills fill context" leak this design removes (14,362 → 2,245 tokens). The harness never reads them at runtime; want them, or your own skills? Drop them in `~/.pi/agent/skills/<name>/SKILL.md` — the validator still passes on machines without that root.
