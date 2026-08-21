@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
 
-export const CORE_SKILLS = ["planner", "brainstormer", "reviewer", "builder", "verifier", "shared-project-memory", "first-principles"];
+export const CORE_SKILLS = ["planner", "reviewer", "builder", "verifier", "shared-project-memory", "first-principles"];
 // Target is ~300 tokens/card; this is a hard cap using a chars/4 token estimate.
 export const CARD_MAX_TOKENS = 500;
 export const DEFAULT_SKILLS_ROOT = join(homedir(), ".pi", "agent", "skills");

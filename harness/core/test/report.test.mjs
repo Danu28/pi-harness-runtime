@@ -23,9 +23,6 @@ import {
   loadSkillCard,
   normalizeBudget,
   parseLanePrediction,
-  parsePhasePrediction,
-  parseCandidates,
-  gate1Required,
   classifyLane,
   gate2Required,
   parsePlan,
@@ -119,28 +116,6 @@ test("reportRows surfaces the plan count when a tasklist exists", () => {
   // no plan → no row
   const noPlan = reportRows(base);
   assert.equal(noPlan.find((r) => r[0] === "plan"), undefined);
-});
-
-test("reportRows shows the ideation phase only for ideate runs", () => {
-  const base = {
-    stats: { calls: 1, tokensIn: 1, tokensCached: 0, tokensOut: 1, cost: 0, gateRuns: 1, gateFails: 0, blockedEdits: 0, consecutiveFails: 0, consecutivePasses: 0, extensionCount: 0, turns: 2 },
-    budget: { maxTurns: 30 },
-    status: "done",
-    verifyLabel: "node --check",
-    baseline: { ok: true },
-    scope: { declared: [] },
-    autoCommit: true,
-  };
-  // default implement run: no phase row at all
-  assert.equal(reportRows(base).some((r) => r[0] === "phase"), false);
-  // ideate run with pending gate 1
-  const ideate = reportRows({ ...base, phase: "ideate", plan: { candidates: ["Users can X."], gate1: "pending" } });
-  const row = ideate.find((r) => r[0] === "phase");
-  assert.equal(row[1], "ideate");
-  assert.ok(row[2].includes("gate 1 pending"), row[2]);
-  // rejected gate 1 → no-build meaning
-  const rejected = reportRows({ ...base, phase: "ideate", plan: { candidates: ["Users can X."], gate1: "rejected" } });
-  assert.ok(rejected.find((r) => r[0] === "phase")[2].includes("no build"), rejected.find((r) => r[0] === "phase")[2]);
 });
 
 test("reportRows shows the lifecycle stages reached", () => {

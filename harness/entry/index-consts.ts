@@ -67,13 +67,6 @@ export interface RunState {
     // surfaced before planning; the model challenges its own first answer with
     // the question/delete/simplify lens, and the refined list feeds the plan.
     requirements: string[];
-    // candidates = the brainstormer's `## Candidate Requirements` (ideation
-    // feature), captured before the plan; feeds Gate 1.
-    candidates: string[];
-    // Gate 1 (ideas review) status: null = not triggered, "pending" = reviewer
-    // must challenge the candidates, "passed"/"skipped" = cleared,
-    // "rejected" = ideation concluded no viable idea (no build).
-    gate1: "pending" | "passed" | "skipped" | "rejected" | null;
     // Gate 2 (plan review) status: null = not triggered, "pending" = reviewer
     // required, "passed" = reviewer approved, "skipped" = user override.
     gate2: "pending" | "passed" | "skipped" | null;
@@ -84,17 +77,12 @@ export interface RunState {
   // Run lifecycle stage. planning → (harness_declare) → development →
   // (harness_review) → review. Printed so the user sees which stage is active.
   stage: "requirements" | "planning" | "development" | "review";
-  // Run phase (ideation feature): "ideate" runs a divergent brainstorm phase
-  // (brainstormer card) before filtering (Gate 1) and planning; "implement" is
-  // the default pipeline. Set via --phase flag or the `Phase:` marker.
-  phase: "ideate" | "implement";
-  phaseForced: boolean; // true when the user passed --phase (marker cannot override)
   // persona.domain = task-adaptive domain focus (taxonomy entry). Stage role is
   // fixed (Product Owner / Senior Developer / Reviewer); domain varies per task.
   persona: { domain: string | null };
   // lane = task complexity triage (S/M/L). Resolved once: --lane flag → model
-  // "Lane:" marker → classifyLane() heuristic → default M. Gate 1/2 are
-  // conditional on L; S/M skip them. laneForced = user mandated via --lane.
+  // "Lane:" marker → classifyLane() heuristic → default M. Gate 2 is
+  // conditional on L; S/M skip it. laneForced = user mandated via --lane.
   lane: "S" | "M" | "L";
   laneForced: boolean;
   // verifyTier = code-selected review depth (quick | standard | full) from lane

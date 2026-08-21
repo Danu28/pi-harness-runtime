@@ -21,9 +21,6 @@ export function printReport(run: RunState, ctx: { ui?: { notify?: (text: string,
   if (run.budgetOverage) {
     lines.push("Note: turns exceeded the budget (text-only tail, no tool calls) — the hard stop fires at the next tool call; the run settled naturally.");
   }
-  if (run.plan?.gate1 === "rejected") {
-    lines.push("Ideation concluded: no viable idea — no build was performed. Use /run --phase ideate to explore other ideas.");
-  }
   if (run.plan?.requirements?.length) {
     lines.push("Requirements (first-principles self-review):");
     for (const r of run.plan.requirements) lines.push(`  - ${r}`);

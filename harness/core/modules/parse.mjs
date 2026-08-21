@@ -4,7 +4,6 @@ import { THINK_LEVELS } from "./constants.mjs";
 import { AI_CAP } from "./constants.mjs";
 import { PERSONA_TAXONOMY } from "./constants.mjs";
 import { LANES } from "./constants.mjs";
-import { PHASE_TAXONOMY } from "./constants.mjs";
 
 /** Parse a model-stated remaining-work estimate: "Remaining: 5 turns" → 5. */
 export function parseRemainingEstimate(text) {
@@ -58,21 +57,12 @@ export function parseCommitSubject(text) {
  * Returns { flags: { think, edit }, task }.
  */
 export function parseRunArgs(args) {
-  const flags = { think: null, edit: null, persona: null, lane: null, budget: null, phase: null };
+  const flags = { think: null, edit: null, persona: null, lane: null, budget: null };
   if (!args) return { flags, task: "" };
   const tokens = String(args).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   const rest = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-    if (t === "--phase") {
-      const val = tokens[i + 1];
-      if (val && !val.startsWith("--") && PHASE_TAXONOMY.includes(val.toLowerCase())) {
-        flags.phase = val.toLowerCase();
-        i++; // consume the value token
-      }
-      // else: missing/invalid value → drop the flag token, keep the rest
-      continue;
-    }
     if (t === "--budget") {
       // Numeric cost ceiling (dollars) for the soft-warning; NaN/<=0 dropped.
       const val = tokens[i + 1];
@@ -200,18 +190,6 @@ export function parsePlan(text) {
 }
 
 /**
- * Parse a "Phase: <ideate|implement>" prediction from the model's first message.
- * Validated against PHASE_TAXONOMY; returns null if absent/invalid. Precedence:
- * --phase flag > this prediction > "implement". Honored only pre-declare.
- */
-export function parsePhasePrediction(text) {
-  const m = String(text ?? "").match(/Phase:\s*(ideate|implement)\b/i);
-  if (!m) return null;
-  const phase = m[1].toLowerCase();
-  return PHASE_TAXONOMY.includes(phase) ? phase : null;
-}
-
-/**
  * Parse a "Lane: <S|M|L>" prediction from the model's first message (the
  * triage marker). Validated against LANES; returns null if absent/invalid.
  * Precedence: --lane flag > this prediction > classifyLane() heuristic.
@@ -224,30 +202,10 @@ export function parseLanePrediction(text) {
 }
 
 /**
- * Parse a `## Candidate Requirements` block (the brainstormer's deliverable)
- * into a ranked list of candidate strings. Extracts the numbered/bulleted items
- * under the heading, stopping at the next `##` heading. Best-effort: no block
- * → empty array.
- */
-export function parseCandidates(text) {
-  const s = String(text ?? "");
-  const m = s.match(/##\s*Candidate Requirements/i);
-  if (!m) return [];
-  const body = s.slice(m.index + m[0].length);
-  const end = body.search(/^##(?!#)/m);
-  const block = (end === -1 ? body : body.slice(0, end)).trim();
-  if (!block) return [];
-  return block
-    .split(/\n(?=(?:\d+[\.\)]\s|[-*]\s))/)
-    .map((l) => l.replace(/^\s*(?:\d+[\.\)]\s|[-*]\s)/, "").trim())
-    .filter(Boolean);
-}
-
-/**
  * Parse the model's requirement-analysis pass from a `## Requirements` block
  * (requirement-analysis stage). Returns a list of requirement strings, mirroring
- * parseCandidates: a numbered/bulleted list under the heading is split into items
- * and each is cleaned. Empty when the model has not produced a requirements block.
+ * splitting a numbered/bulleted list under the heading into items
+ * and cleaning each. Empty when the model has not produced a requirements block.
  *
  * The requirements pass is the FIRST pre-development step: the model draft its
  * own first answer to the task, then self-reviews it through the first-principles

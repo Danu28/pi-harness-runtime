@@ -23,9 +23,6 @@ import {
   loadSkillCard,
   normalizeBudget,
   parseLanePrediction,
-  parsePhasePrediction,
-  parseCandidates,
-  gate1Required,
   classifyLane,
   gate2Required,
   parsePlan,
@@ -101,7 +98,6 @@ test("stageSkillCard maps run stages to operating-discipline cards", () => {
 
 test("stageLayerCard layers an extra lens onto requirements only", () => {
   assert.equal(stageLayerCard("requirements"), "reviewer");
-  assert.equal(stageLayerCard("ideation"), null);
   assert.equal(stageLayerCard("plan"), null);
   assert.equal(stageLayerCard("plan-review"), null);
   assert.equal(stageLayerCard("development"), null);
@@ -113,7 +109,7 @@ test("stageLayerCard layers an extra lens onto requirements only", () => {
 });
 
 test("every run stage maps to a non-null skill card (no default fallback)", () => {
-  const stages = ["ideation", "planning", "requirements", "plan", "plan-review", "development", "build", "review", "verify"];
+  const stages = ["planning", "requirements", "plan", "plan-review", "development", "build", "review", "verify"];
   for (const s of stages) assert.ok(stageSkillCard(s), `stage "${s}" must map to a card`);
 });
 
@@ -130,22 +126,6 @@ test("verifyTier selects quick/standard/full from lane + plan footprint", () => 
   // Standard: otherwise (M-lane, no prior pass)
   assert.equal(verifyTier({ lane: "M", plan: safe }), "standard");
   assert.equal(verifyTier({ lane: "M" }), "standard");
-});
-
-test("gate1Required fires only for ideate runs with candidates", () => {
-  const withCands = { candidates: ["Users can X."], tasks: [] };
-  const emptyCands = { candidates: [], tasks: [] };
-  // ideate + candidates → required
-  assert.equal(gate1Required("ideate", withCands), true);
-  // implement phase → never required
-  assert.equal(gate1Required("implement", withCands), false);
-  // no candidates → not required
-  assert.equal(gate1Required("ideate", emptyCands), false);
-  assert.equal(gate1Required("ideate", null), false);
-  assert.equal(gate1Required("ideate", undefined), false);
-  // blank items are filtered at capture time (parseCandidates), not here — an
-  // empty array never triggers the gate
-  assert.equal(gate1Required("ideate", { candidates: [], tasks: [] }), false);
 });
 
 test("gate2Required fires only for L-lane boundary/risk plans", () => {

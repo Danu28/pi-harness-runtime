@@ -1,6 +1,6 @@
 # reviewer — runtime card
 ## When
-Challenge requirements (Gate 1) or an approved plan (Gate 2) before build. Gate 2
+Challenge an approved plan (Gate 2) before build. Gate 2
 runs only when the plan has a `footprint: boundary` task or a Risk Note naming a
 trust boundary. (Full `SKILL.md` = process reference.)
 

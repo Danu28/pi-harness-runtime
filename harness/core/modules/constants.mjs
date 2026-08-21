@@ -119,12 +119,6 @@ export const PERSONA_TAXONOMY = ["generalist", "security", "performance", "api",
 // escalator.
 export const LANES = ["S", "M", "L"];
 
-// Run phases (ideation feature). "implement" = the default pipeline
-// (brainstorm-less). "ideate" = a divergent idea-generation phase that runs
-// before filtering (Gate 1) and planning. Set via --phase flag or the model's
-// `Phase: ideate|implement` marker (mirrors the Lane/Thinking markers).
-export const PHASE_TAXONOMY = ["ideate", "implement"];
-
 // Agent-facing artifact dirs (revised review: reuse the gitignored .harness/
 // instead of a new top-level /harness folder). Enforcement is BY DIRECTORY,
 // not by model judgment: anything the agent writes under TEMP_DIR is cleared at

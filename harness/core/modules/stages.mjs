@@ -10,19 +10,9 @@ export function gate2Required(lane, plan) {
   return lane === "L" && !!(plan && plan.risky);
 }
 
-/**
- * Gate 1 condition (ideation feature): the ideas-review gate fires only for an
- * ideate-phase run that has produced candidates. Mirrors gate2Required: the
- * reviewer must challenge the candidates before planning proceeds.
- */
-export function gate1Required(phase, plan) {
-  return phase === "ideate" && !!(plan && plan.candidates && plan.candidates.length);
-}
-
 // Stage → skill-card mapping (revised-plan A7). The injected operating-discipline
 // card follows the active stage instead of always being "builder".
 const STAGE_CARD = {
-  ideation: "brainstormer",
   // Strict first-principles BEFORE building: the run state machine's real
   // pre-development stage is "planning" (its only stages are planning/
   // development/review). Mapping it to first-principles makes the question/delete

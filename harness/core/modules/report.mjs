@@ -197,22 +197,6 @@ export function reportRows(run) {
   if (st.skillCardTokens) {
     rows.push(["skill cards", `${st.skillCardTokens} tok`, "operating-discipline card tokens injected this run"]);
   }
-  // Ideation phase row: shown only for ideate runs (or a set gate 1 verdict), so
-  // the default implement path's report stays clean.
-  if (run.phase === "ideate" || run.plan?.gate1) {
-    const g1 = run.plan?.gate1;
-    const meaning =
-      g1 === "rejected"
-        ? "no build — ideation concluded no viable idea"
-        : g1 === "pending"
-          ? "candidates produced — gate 1 pending"
-          : g1 === "passed"
-            ? "candidates reviewed — gate 1 passed"
-            : g1 === "skipped"
-              ? "candidates — gate 1 skipped (override)"
-              : "ideation";
-    rows.push(["phase", "ideate", meaning]);
-  }
   if (run.verifyCwd && run.verifyCwd !== run.cwd) {
     rows.push(["gate root", run.verifyCwd, "manifest above cwd"]);
   }

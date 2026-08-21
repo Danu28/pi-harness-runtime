@@ -63,9 +63,6 @@ import {
   tasklistEnabled,
   normalizeRel,
   parseLanePrediction,
-  parsePhasePrediction,
-  parseCandidates,
-  gate1Required,
   classifyLane,
   stageSkillCard,
   stageLayerCard,
@@ -427,10 +424,8 @@ export default function harness(pi: ExtensionAPI) {
           editLevel: (flags.edit as ThinkingLevel) ?? null,
           done: false,
         },
-        plan: { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } },
+        plan: { goal: "", anchors: "", tasks: [], risky: false, requirements: [], gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } },
         stage: "requirements",
-        phase: (flags.phase as "ideate" | "implement") ?? "implement",
-        phaseForced: flags.phase != null,
         persona: { domain: (flags.persona as string) ?? null },
         // Lane triage (Phase 0): user --lane wins; else seed with the heuristic
         // fallback now and let the model's "Lane:" marker refine it in message_end
@@ -517,7 +512,7 @@ export default function harness(pi: ExtensionAPI) {
       // waitForIdle() right after sendUserMessage returns immediately — wait
       // for the agent_settled EVENT instead, with a generous safety cap.
       try {
-        pi.sendUserMessage(prompt + skillCardNote(cfg, run.phase === "ideate" ? "ideation" : "planning", run.stats));
+        pi.sendUserMessage(prompt + skillCardNote(cfg, "planning", run.stats));
       } catch (err) {
         finishRun(run, pi);
         ctx.ui.notify(`Harness: failed to start run — ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -632,12 +627,11 @@ export default function harness(pi: ExtensionAPI) {
         .replaceAll("{{PERSONA}}", renderPersona("planning", run.persona?.domain ?? null));
 
       const cfg = loadHarnessConfig(run.cwd);
-      // An ideate-phase run in the planning stage gets the brainstormer card.
-      let card = skillCardNote(cfg, run.phase === "ideate" && (run.stage === "planning" || run.stage === "requirements") ? "ideation" : run.stage, run.stats);
+      let card = skillCardNote(cfg, run.stage, run.stats);
       // P3-T2: quick-tier runs skip the verifier card even on mid-review resume
       // (consistent with the one-shot review-entry wiring above).
       if (run.stage === "review" && (run.verifyTier ?? "standard") === "quick") card = "";
-      const discipline = activeCardNames(cfg, run.phase === "ideate" && (run.stage === "planning" || run.stage === "requirements") ? "ideation" : run.stage).join(" + ");
+      const discipline = activeCardNames(cfg, run.stage).join(" + ");
       ctx.ui.notify(`Harness: resumed +${sized} turns (budget ${run.budget.maxTurns}) — ${run.verifyLabel} | stage ${run.stage ?? "planning"} | discipline ${discipline || "(default)"}`, "info");
       try {
         pi.sendUserMessage(prompt + card);
@@ -717,42 +711,6 @@ export default function harness(pi: ExtensionAPI) {
     description: "Skip the plan review (Gate 2) on judgment — user override for L-lane boundary runs",
     handler: async (_args, ctx) => {
       const msg = clearGate2(activeRun, "skipped");
-      ctx.ui.notify(msg ?? "No active run.", msg?.includes("No pending") ? "warning" : "info");
-    },
-  });
-
-  // ---- /harness-gate1-pass | /harness-gate1-skip | /harness-gate1-reject ----
-  // Gate 1 (ideation feature): review the brainstormed `## Candidate
-  // Requirements` before planning. pass = candidates survived review;
-  // skip = user override; reject = ideation concluded no viable idea (no build).
-  const clearGate1 = (run: RunState | null, verdict: "passed" | "skipped" | "rejected") => {
-    if (!run) return null;
-    if (run.plan?.gate1 !== "pending") return "No pending Gate 1 to clear.";
-    run.plan.gate1 = verdict;
-    writeRun(run);
-    if (verdict === "rejected") {
-      return "Gate 1 rejected: ideation concluded no viable idea — the run will end without building.";
-    }
-    return `Gate 1 ${verdict} (candidates ${verdict === "passed" ? "reviewed" : "skipped by user"}). Proceed to planning.`;
-  };
-  pi.registerCommand("harness-gate1-pass", {
-    description: "Mark the ideas review (Gate 1) as passed so an ideate run can proceed to planning",
-    handler: async (_args, ctx) => {
-      const msg = clearGate1(activeRun, "passed");
-      ctx.ui.notify(msg ?? "No active run.", msg?.includes("No pending") ? "warning" : "info");
-    },
-  });
-  pi.registerCommand("harness-gate1-skip", {
-    description: "Skip the ideas review (Gate 1) on judgment — user override for ideate runs",
-    handler: async (_args, ctx) => {
-      const msg = clearGate1(activeRun, "skipped");
-      ctx.ui.notify(msg ?? "No active run.", msg?.includes("No pending") ? "warning" : "info");
-    },
-  });
-  pi.registerCommand("harness-gate1-reject", {
-    description: "Reject all ideation candidates — conclude no viable idea and end the run without building",
-    handler: async (_args, ctx) => {
-      const msg = clearGate1(activeRun, "rejected");
       ctx.ui.notify(msg ?? "No active run.", msg?.includes("No pending") ? "warning" : "info");
     },
   });
@@ -1439,27 +1397,6 @@ function editCoachForEvent(
     // declared. Only for non-trivial tasks (planLevel >= medium), so trivial
     // runs stay zero-overhead. Overwrite keeps the latest plan; a later empty
     // parse (a non-planning message) never clears a previously captured one.
-    // Ideation phase marker: honor `Phase: ideate|implement` from the model's
-    // first message (pre-declare only; an explicit --phase flag always wins).
-    if (!run.planning?.done && !run.phaseForced) {
-      const ph = parsePhasePrediction(text);
-      if (ph) run.phase = ph;
-    }
-    // Ideation capture: parse the brainstormer's `## Candidate Requirements`
-    // BEFORE the plan. When present on an ideate run, arm Gate 1 — the reviewer
-    // must challenge the candidates before planning proceeds. Keyed on the ideate
-    // phase, not thinking level (candidates ARE the ideation deliverable).
-    if (!run.planning?.done && run.phase === "ideate") {
-      const cand = parseCandidates(text);
-      if (cand.length) {
-        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
-        run.plan.candidates = cand;
-        if (run.plan.gate1 == null && gate1Required(run.phase, run.plan)) {
-          run.plan.gate1 = "pending";
-        }
-        writeRun(run);
-      }
-    }
     // Requirement-analysis stage: the model drafts its first-pass requirements and
     // self-reviews them through the first-principles lens (Question/Delete/
     // Simplify/Accelerate/Automate) BEFORE committing to a plan. The refined
@@ -1467,7 +1404,7 @@ function editCoachForEvent(
     if (!run.planning?.done) {
       const reqs = parseRequirements(text);
       if (reqs.length) {
-        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
+        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, requirements: [], gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
         run.plan.requirements = reqs;
         writeRun(run);
       }
@@ -1475,7 +1412,7 @@ function editCoachForEvent(
         if (!run.planning?.done && tasklistEnabled(planLevel(run))) {
       const p = parsePlan(text);
       if (p.tasks.length || p.goal || p.plan) {
-        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } }; // guard for crash-recovered runs
+        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, requirements: [], gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } }; // guard for crash-recovered runs
         run.plan.goal = p.goal || run.plan.goal;
         run.plan.anchors = p.plan || run.plan.anchors;
         // T3: merge, don't replace — a mid-run partial restate (fewer tasks)
@@ -1512,7 +1449,7 @@ function editCoachForEvent(
     {
       const prog = parsePlanProgress(text);
       if (prog.total > 0) {
-        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, candidates: [], requirements: [], gate1: null, gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
+        run.plan ??= { goal: "", anchors: "", tasks: [], risky: false, requirements: [], gate2: null, progress: { done: 0, total: 0, remaining: 0, current: null } };
         run.plan.progress = prog;
       }
     }

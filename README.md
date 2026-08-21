@@ -48,10 +48,6 @@ Need it per-project instead? Same files, but under `.pi/extensions/` and `.pi/pr
 /run --think <off|minimal|low|medium|high>   force a thinking level
 /run --lane <S|M|L>              force a complexity lane
 /run --budget <$>                cost soft-warning ceiling (50% warning, no hard stop)
-/run --phase <ideate|implement>  run a brainstorm-ideation phase before planning (default implement)
-/harness-gate1-pass              clear Gate 1 (ideas review): candidates accepted → proceed to plan
-/harness-gate1-skip              skip Gate 1 on judgment (user override)
-/harness-gate1-reject            reject all candidates — conclude no viable idea, no build
 /harness-resume [N]              resume a stopped run (state, stats, scope preserved)
 /harness-reset                   clear stale run state after a crash
 /harness-stats                   show run statistics
@@ -100,15 +96,7 @@ Two cheap correctness/cost refinements are built in:
   turn. Configurable via `toolOutputTokens` in `harness.json` (`0`/`null` disables); tightens
   pi's own 50KB bash truncation to a tighter token budget.
 
-### Ideation phase (`--phase ideate`)
-For "come up with ideas/features" requests, run `/run --phase ideate <task>` (or the
-model self-selects via a `Phase: ideate` marker). A **brainstormer** skill card is
-injected and the run diverges first (≥10 ideas) before converging to a `## Candidate
-Requirements` block — the deliverable handed to **Gate 1** (ideas review). The user
-then clears it with `/harness-gate1-pass` / `/harness-gate1-skip`, or ends the run with
-`/harness-gate1-reject` (no viable idea → no build). Only after Gate 1 does the run
-proceed to a `## Plan` and the normal pipeline. The default phase is `implement`
-(no ideation); creativity comes from the card's divergence prompting, not temperature.
+No `harness.json` → the harness scans `package.json` scripts + language-specific gates (tsc, pytest, go vet, cargo check…) and falls back to a `node --check` syntax gate; without any of those it runs in **degraded mode** (clearly labeled).
 
 No `harness.json` → the harness scans `package.json` scripts + language-specific gates (tsc, pytest, go vet, cargo check…) and falls back to a `node --check` syntax gate; without any of those it runs in **degraded mode** (clearly labeled).
 
