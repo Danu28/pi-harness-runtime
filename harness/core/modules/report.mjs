@@ -313,7 +313,16 @@ export function reportRows(run) {
     const tag = unmapped > 0 ? ` · ${unmapped} unmapped` : "";
     rows.push(["requirements", `${reqs.length} (${mapped} verdicts${tag})`, listed.slice(0, 200)]);
   }
-  const lane = run.lane ?? "?";
+  // P5: warn when a requirement R# has no task referencing it (orphan)
+  {
+    const tasksText = (run.plan?.tasks ?? []).map(t => String(t.text ?? t)).join(" ");
+    const orphan = reqs.filter(rq => {
+      const id = String(rq).match(/^R\d+/i)?.[0]?.toUpperCase();
+      return id && !new RegExp("\\b"+id+"\\b","i").test(tasksText);
+    });
+    if(orphan.length) rows.push(["req→task", `${orphan.length} orphan`, orphan.slice(0,3).join(" · ").slice(0,120)]);
+  }
+    const lane = run.lane ?? "?";
   const laneMeaning = lane === "S" ? "trivial" : lane === "M" ? "small" : lane === "L" ? "boundary/risk" : "unset";
   rows.push(["lane", lane, laneMeaning]);
   if (run.verifyTier) rows.push(["verify tier", run.verifyTier, "quick/standard/full"]);

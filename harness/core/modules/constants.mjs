@@ -33,19 +33,19 @@ export const DEFAULT_CONFIG = {
   // Cross-run gate cache (gap #2): reuse a last-green gate verdict when the git
   // state (HEAD + working-tree porcelain set) exactly matches a prior green run.
   cacheGreenGates: true,
-  // Selective tests (gap #1): narrow the edit-gate to tests affected by the
+  // Selective tests (gap #1): narrow the edit-gate to tests affected by the — default-on, falls back to full
   // changed files when the verify command is a recognized runner. Full suite
   // always runs at review. Opt-in — false keeps today's behavior.
-  selectiveTests: false,
+  selectiveTests: true,
   // Skip-gate on pure-doc/whitespace edits (gap #8): only changed doc files
   // (.md/.txt/images) → the edit-gate is skipped; review still runs full.
   skipDocGate: true,
   // Warn→confirm tiers (gap #9): harness.json → dangerTiers: {"<pattern>":
   // "block"|"confirm"|"allow"}. Default block keeps today's behavior.
   dangerTiers: {},
-  // Monorepo per-package gates (gap #10): when all changed files resolve to one
+  // Monorepo per-package gates (gap #10): default-on — when all changed files resolve to one
   // nested package, gate that package's verify instead of the root suite.
-  perPackageGate: false,
+  perPackageGate: true,
   // Last-green rollback point (gap #3): on a red gate, record the failing head
   // and coach the newest cached green as a rollback point (`/harness-fork-green`
   // shows it). Off by default — today's behavior stays when unset/false.

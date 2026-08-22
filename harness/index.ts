@@ -223,10 +223,10 @@ function lateSync(run: RunState) {
 function maybeAutoCommit(run: RunState) {
   if (run.status !== "done") return;
   if (run.settleCap) return; // force-finalized by the settle cap — never commit incomplete work
-  if (run.acceptance?.verdict === "unmet") {
+  if (run.acceptance?.verdict === "unmet" || run.acceptance?.verdict === "partial") {
     // Acceptance closure (v1.13): a run that reports itself not-accepted must
     // not auto-commit — the report surfaces the skip so the user can decide.
-    run.autoCommitResult = { committed: false, reason: "acceptance unmet (run reports not-accepted)", leftover: [] };
+    run.autoCommitResult = { committed: false, reason: `acceptance ${run.acceptance.verdict} (run reports not-accepted)`, leftover: [] };
     console.log(`HARNESS: auto-commit skipped — ${run.autoCommitResult.reason}`);
     return;
   }
