@@ -295,6 +295,24 @@ export function reportRows(run) {
     const cur = prog.current ? ` | on: ${String(prog.current).slice(0, 40)}` : (prog.remaining === 0 ? " | all done" : "");
     rows.push(["plan progress", `${prog.done}/${prog.total} (${prog.remaining} left)${cur}`, "checkbox ticks"]);
   }
+  // Requirements traceability (G3 + R2): surface the captured requirement
+  // list and each R#'s met/partial/unmet verdict so the report closes the loop
+  // the harness promises. Without this, "requirements-first" is cosmetic.
+  const reqs = run.plan?.requirements ?? [];
+  if (reqs.length) {
+    const verdicts = run.requirementVerdicts ?? {};
+    const listed = reqs
+      .map((r) => {
+        const id = String(r).match(/^R\d+/i)?.[0]?.toUpperCase();
+        const v = id && verdicts[id] ? ` [${verdicts[id]}]` : "";
+        return `${r}${v}`;
+      })
+      .join(" · ");
+    const mapped = Object.keys(verdicts).length;
+    const unmapped = reqs.length - mapped;
+    const tag = unmapped > 0 ? ` · ${unmapped} unmapped` : "";
+    rows.push(["requirements", `${reqs.length} (${mapped} verdicts${tag})`, listed.slice(0, 200)]);
+  }
   const lane = run.lane ?? "?";
   const laneMeaning = lane === "S" ? "trivial" : lane === "M" ? "small" : lane === "L" ? "boundary/risk" : "unset";
   rows.push(["lane", lane, laneMeaning]);

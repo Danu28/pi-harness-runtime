@@ -937,12 +937,30 @@ export default function harness(pi: ExtensionAPI) {
       const memNote = run.memoryCheck && !run.memoryCheck.ok
         ? `\nHARNESS: ${run.memoryCheck.note} — append a one-line lesson to .harness/longterm/memory/failures.md before summarizing.`
         : "";
+      // G1 (traceability guard): advisory nudge if the run hasn't closed its own
+      // loop — open tasks or requirements with no verdict. Read-only; the model
+      // still decides, but a `met` verdict ignoring open work is flagged.
+      let guardNote = "";
+      {
+        const tasks = run.plan?.tasks ?? [];
+        const prog = run.plan?.progress;
+        const openTasks = tasks.length > 0 && !!prog && prog.total > 0 && prog.done !== prog.total;
+        const rreqs = run.plan?.requirements ?? [];
+        const verdicts = run.requirementVerdicts ?? {};
+        const unmapped = rreqs.filter((r) => !verdicts[String(r).match(/^R\d+/i)?.[0]?.toUpperCase()]).length;
+        if (openTasks || (rreqs.length > 0 && unmapped > 0)) {
+          const bits = [];
+          if (openTasks) bits.push(`${prog.done}/${prog.total} tasks done`);
+          if (rreqs.length > 0 && unmapped > 0) bits.push(`${unmapped}/${rreqs.length} requirements unmapped`);
+          guardNote = `\nHARNESS: review guard — ${bits.join(", ")}. Map every R# to met/partial/unmet and tick all tasks before a 'met' verdict.`;
+        }
+      }
       // P3-T2: verifyTier is now real — standard/full runs get the verifier card
       // at review-entry (tests + review, +security/perf for full); quick-tier
       // runs skip it (the build-boundary gate + one-shot review line is their
       // check), saving ~430 tok on the common S-lane path.
       const reviewCard =
-        (accNote + revNote + memNote) + (tier === "quick" ? "" : skillCardNote(loadHarnessConfig(run.cwd), "review", run.stats));
+        (accNote + revNote + memNote + guardNote) + (tier === "quick" ? "" : skillCardNote(loadHarnessConfig(run.cwd), "review", run.stats));
       return {
         content: [
           {
